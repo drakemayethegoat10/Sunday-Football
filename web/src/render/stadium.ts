@@ -799,6 +799,30 @@ export class Stadium {
     c.caps.instanceMatrix.needsUpdate = true;
   }
 
+  private flags: THREE.Object3D[] = [];
+  private flagMat = new THREE.MeshLambertMaterial({ color: '#ffd400', side: THREE.DoubleSide });
+
+  /** Drop a yellow penalty flag at a field position (core coordinates). */
+  addFlag(x: number, y: number) {
+    const g = new THREE.Group();
+    const cloth = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.42, 2, 2), this.flagMat);
+    const pos = cloth.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) pos.setZ(i, (Math.random() - 0.5) * 0.06);
+    cloth.geometry.computeVertexNormals();
+    cloth.rotation.x = -Math.PI / 2;
+    cloth.rotation.z = Math.random() * Math.PI;
+    cloth.position.y = 0.05;
+    g.add(cloth);
+    g.position.set(x + (Math.random() - 0.5) * 1.5, 0, -(y + (Math.random() - 0.5) * 1.5));
+    this.group.add(g);
+    this.flags.push(g);
+  }
+
+  clearFlags() {
+    for (const f of this.flags) this.group.remove(f);
+    this.flags = [];
+  }
+
   /** Crowd bounces (texture shimmy) when excited, 0–1. */
   update(time: number, excitement: number) {
     const bounce = excitement > 0.2 ? Math.abs(Math.sin(time * 9)) * 0.012 * excitement : Math.sin(time * 1.3) * 0.0015;

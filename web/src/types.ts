@@ -16,6 +16,14 @@ export interface Hud {
   phase: 'playcall' | 'inplay' | 'final';
   play_phase: 'presnap' | 'live' | 'over';
   user_side: 'offense' | 'defense' | 'none';
+  situation: 'scrimmage' | 'kickoff' | 'try' | 'two_point';
+  special: '' | 'kickoff' | 'punt' | 'fg' | 'pat';
+  user_kicking: boolean;
+  user_choosing: boolean;
+  quarter_label: string;
+  clock_running: boolean;
+  timeouts: [number, number];
+  kneel_window: boolean;
   abbr: [string, string];
   score: [number, number];
   quarter: number;
@@ -49,6 +57,7 @@ export interface MenuItem {
   name: string;
   cat: string;
   formation: string;
+  group: string;
 }
 
 export interface GameEvent {

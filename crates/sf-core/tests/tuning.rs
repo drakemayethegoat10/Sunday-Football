@@ -13,7 +13,7 @@ fn coverage_report() {
     let mut by_off: BTreeMap<&str, (u32, f32, f32, f32)> = BTreeMap::new();
     let mut pressure = (0u32, 0u32, 0f32);
     for seed in 1..=6 {
-        let s = Settings { quarter_len: 300.0, runoff: 15.0, user_team: None };
+        let s = Settings { quarter_len: 300.0, runoff: 15.0, user_team: None, ..Default::default() };
         let mut g = Game::new(seed, s, ["SAR", "HOU"], [1.0, 0.0]);
         let mut caught = false;
         let mut sep = 0.0;

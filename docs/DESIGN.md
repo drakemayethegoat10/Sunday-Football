@@ -70,17 +70,20 @@ skill area, fatigue. Quarter length defaults to 5 minutes with an accelerated cl
 
 ### Default web controls
 
-| Action | Key |
-|---|---|
-| Move | WASD / Arrow keys |
-| Sprint | Shift |
-| Snap / Juke / Dive tackle | Space |
-| Spin | Q |
-| Stiff arm | E |
-| Throw to receiver | 1–5 (tap = bullet, hold = lob), or **click the receiver** |
-| Switch defender | Tab |
-| Camera preset / zoom | V / `-` `=` |
-| Pause | Esc / P |
+| Action | Keyboard | Xbox controller |
+|---|---|---|
+| Move | WASD / Arrow keys | Left stick / D-pad |
+| Sprint | Shift | RT |
+| Snap / Juke / Dive tackle | Space | A |
+| Spin / Stiff arm | Q / E | X / B |
+| Throw to receiver | 1–5 or **click the receiver** (tap = bullet, hold = lob) | A B X Y RB (tap / hold) |
+| Switch defender | Tab | B |
+| Kick meter | Space ×3 (start, power, accuracy) | A ×3 |
+| Fair catch | F | Y |
+| Timeout | T | Y (in the play-call menu) |
+| Play-call tabs | Q / E | LB / RB |
+| Camera preset / zoom | V / `-` `=` | View |
+| Pause | Esc / P | Menu |
 
 ## 4. League
 

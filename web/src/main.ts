@@ -1,5 +1,5 @@
 // Sunday Football web client: boots the WebAssembly core, renders with Three.js,
-// and wires input, UI and audio together.
+// and wires input (keyboard, mouse, Xbox controller), UI and audio together.
 
 import '@fontsource/barlow-condensed/600.css';
 import '@fontsource/barlow-condensed/700.css';
@@ -15,8 +15,10 @@ import { Ps2Pipeline } from './render/pipeline';
 import { setNumberFont } from './render/athlete';
 import { Players } from './render/players';
 import { CameraRig } from './render/camera';
-import { Input } from './input';
-import { UI, type TitleChoice } from './ui';
+import { BTN, Input } from './input';
+import { Gamepads, PAD, type PadState } from './gamepad';
+import { KickMeter } from './kickmeter';
+import { UI, type TeamStatLine, type TitleChoice } from './ui';
 import { Sfx } from './audio';
 import { Quality, type QualityMode } from './quality';
 import { FLAG, N, STRIDE, type GameEvent, type Hud, type LineupEntry, type MenuItem, type TeamInfo } from './types';
@@ -28,6 +30,7 @@ const canvas = document.getElementById('game') as HTMLCanvasElement;
 const ui = new UI(TEAMS);
 const sfx = new Sfx();
 const quality = new Quality();
+const pads = new Gamepads();
 
 interface Session {
   attract: boolean;
@@ -43,7 +46,9 @@ interface Session {
   lineup: number;
   menuDelay: number;
   finalDelay: number;
+  finalShown: boolean;
   paused: boolean;
+  difficulty: number;
 }
 
 let renderer: THREE.WebGLRenderer | null = null;
@@ -55,6 +60,12 @@ let time = 0;
 let showFps = false;
 let fpsFrames = 0;
 let fpsTime = 0;
+let usingPad = false;
+
+const meter = new KickMeter((power, accuracy) => {
+  session?.game.kick(power, accuracy);
+  sfx.ui();
+});
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -86,18 +97,26 @@ function disposeScene(scene: THREE.Scene) {
   });
 }
 
-function newSession(home: TeamInfo, away: TeamInfo, quarterMinutes: number, attract: boolean): Session {
+interface SessionOpts {
+  quarterMinutes: number;
+  attract: boolean;
+  difficulty: number;
+  penalties: number;
+  overtime: boolean;
+}
+
+function newSession(home: TeamInfo, away: TeamInfo, o: SessionOpts): Session {
   if (session) disposeScene(session.scene);
   const scene = new THREE.Scene();
   const stadium = new Stadium(scene, home, away, TEAMS, renderer!.capabilities.getMaxAnisotropy());
   const players = new Players(scene, home, away);
   const cam = new CameraRig(window.innerWidth / window.innerHeight);
-  if (attract) cam.preset = 1;
+  if (o.attract) cam.preset = 1;
   const seed = (Math.random() * 0x7fffffff) | 0;
-  const game = new WebGame(seed, home.id, away.id, quarterMinutes, attract ? -1 : 0);
+  const game = new WebGame(seed, home.id, away.id, o.quarterMinutes, o.attract ? -1 : 0, o.difficulty, o.penalties, o.overtime);
   const cur = game.snapshot();
   const s: Session = {
-    attract,
+    attract: o.attract,
     game,
     scene,
     stadium,
@@ -110,8 +129,11 @@ function newSession(home: TeamInfo, away: TeamInfo, quarterMinutes: number, attr
     lineup: -1,
     menuDelay: 0,
     finalDelay: 0,
+    finalShown: false,
     paused: false,
+    difficulty: o.difficulty,
   };
+  meter.fillTime = [1.25, 0.95, 0.8, 0.68][o.difficulty] ?? 0.95;
   applyLineup(s);
   cam.cut();
   acc = 0;
@@ -123,20 +145,28 @@ function applyLineup(s: Session) {
   s.players.setLineup(lineup);
   s.lineup = s.hud.lineup;
   s.prev.set(s.cur);
+  s.stadium.clearFlags();
+  meter.reset();
 }
 
 function startAttract() {
   const a = Math.floor(Math.random() * TEAMS.length);
   let b = Math.floor(Math.random() * TEAMS.length);
   if (b === a) b = (a + 1) % TEAMS.length;
-  session = newSession(TEAMS[a], TEAMS[b], 5, true);
+  session = newSession(TEAMS[a], TEAMS[b], { quarterMinutes: 5, attract: true, difficulty: 1, penalties: 1, overtime: true });
 }
 
 function startGame(c: TitleChoice) {
   sfx.start();
   quality.setMode(c.quality as QualityMode);
   applyQuality();
-  session = newSession(TEAMS[c.home], TEAMS[c.away], c.quarterMinutes, false);
+  session = newSession(TEAMS[c.home], TEAMS[c.away], {
+    quarterMinutes: c.quarterMinutes,
+    attract: false,
+    difficulty: c.difficulty,
+    penalties: c.penalties,
+    overtime: c.overtime,
+  });
   ui.showTitle(false);
   ui.showFinal(session.hud, null);
   input.reset();
@@ -146,7 +176,8 @@ function startGame(c: TitleChoice) {
 function quitToTitle() {
   ui.showPause(false, labels());
   ui.closeMenu();
-  ui.showFinal(session!.hud, null);
+  if (session) ui.showFinal(session.hud, null);
+  meter.show(false);
   input.enabled = false;
   startAttract();
   ui.showTitle(true);
@@ -192,7 +223,27 @@ function togglePause() {
   });
 }
 
+function cycleCamera(s: Session) {
+  s.cam.cyclePreset();
+  ui.banner(s.cam.presetName.toUpperCase() + ' CAM', 'info');
+}
+
+function callTimeout(s: Session) {
+  if (s.game.timeout()) {
+    sfx.whistle();
+    if (ui.menuOpen) {
+      ui.closeMenu();
+      s.menuDelay = 0.6; // reopen with the updated count
+    }
+  }
+}
+
+function meterActive(s: Session | null): boolean {
+  return !!s && !s.attract && s.hud.user_kicking && !s.paused;
+}
+
 function onKey(e: KeyboardEvent): boolean {
+  usingPad = false;
   const s = session;
   if (!s || s.attract) {
     if (e.code === 'Enter' && !e.repeat) {
@@ -201,8 +252,22 @@ function onKey(e: KeyboardEvent): boolean {
     }
     return false;
   }
-  if (ui.menuOpen && !s.paused && ui.menuKey(e.code)) {
-    sfx.ui();
+  if (s.finalShown) {
+    if (e.code === 'Enter' && !e.repeat) quitToTitle();
+    return true;
+  }
+  if (ui.menuOpen && !s.paused) {
+    if (e.code === 'KeyT') {
+      callTimeout(s);
+      return true;
+    }
+    if (ui.menuKey(e.code)) {
+      sfx.ui();
+      return true;
+    }
+  }
+  if (meterActive(s) && e.code === 'Space') {
+    if (!e.repeat) meter.press();
     return true;
   }
   switch (e.code) {
@@ -212,10 +277,7 @@ function onKey(e: KeyboardEvent): boolean {
       if (!e.repeat) togglePause();
       return true;
     case 'KeyV':
-      if (!e.repeat) {
-        s.cam.cyclePreset();
-        ui.banner(s.cam.presetName.toUpperCase() + ' CAM', 'info');
-      }
+      if (!e.repeat) cycleCamera(s);
       return true;
     case 'Minus':
     case 'NumpadSubtract':
@@ -228,8 +290,11 @@ function onKey(e: KeyboardEvent): boolean {
     case 'KeyM':
       if (!e.repeat) sfx.toggleMute();
       return true;
-    case 'KeyF':
+    case 'Backquote':
       if (!e.repeat) showFps = !showFps;
+      return true;
+    case 'KeyT':
+      if (!e.repeat && s.hud.play_phase === 'presnap') callTimeout(s);
       return true;
   }
   return s.paused;
@@ -249,12 +314,83 @@ function pickIcon(clientX: number, clientY: number): number {
 
 const input = new Input(canvas, onKey, pickIcon);
 
+const ICON_BUTTONS = [PAD.A, PAD.B, PAD.X, PAD.Y, PAD.RB];
+
+function iconsUp(s: Session): boolean {
+  for (let i = 0; i < N; i++) if (s.cur[i * STRIDE + 7] > 0) return true;
+  return false;
+}
+
+function userFlags(s: Session): number {
+  const u = s.players.userIndex;
+  return u >= 0 ? s.cur[u * STRIDE + 6] : 0;
+}
+
+/** Controller handling for every screen. */
+function handlePad(p: PadState, s: Session | null) {
+  input.padMove = [0, 0];
+  input.padSprint = false;
+  if (!p.connected) return;
+  if (p.active) usingPad = true;
+  if (!s || s.attract) {
+    if (p.pressed.has(PAD.Menu) || p.pressed.has(PAD.A)) ui.titleStart();
+    if (p.nav === 'left') ui.titleStep('away', -1);
+    if (p.nav === 'right') ui.titleStep('away', 1);
+    if (p.pressed.has(PAD.LB)) ui.titleStep('home', -1);
+    if (p.pressed.has(PAD.RB)) ui.titleStep('home', 1);
+    return;
+  }
+  if (s.finalShown) {
+    if (p.pressed.has(PAD.A) || p.pressed.has(PAD.Menu)) quitToTitle();
+    return;
+  }
+  if (p.pressed.has(PAD.Menu)) {
+    togglePause();
+    return;
+  }
+  if (s.paused) {
+    if (p.pressed.has(PAD.B) || p.pressed.has(PAD.A)) togglePause();
+    if (p.pressed.has(PAD.View)) cycleCamera(s);
+    return;
+  }
+  if (p.pressed.has(PAD.View)) cycleCamera(s);
+  if (ui.menuOpen) {
+    if (p.nav) ui.menuNav(p.nav);
+    if (p.pressed.has(PAD.A)) ui.menuNav('select');
+    if (p.pressed.has(PAD.LB)) ui.menuNav('tabPrev');
+    if (p.pressed.has(PAD.RB)) ui.menuNav('tabNext');
+    if (p.pressed.has(PAD.Y)) callTimeout(s);
+    if (p.nav || p.pressed.size) sfx.ui();
+    return;
+  }
+  if (meterActive(s)) {
+    if (p.pressed.has(PAD.A)) meter.press();
+    return;
+  }
+  input.padMove = [p.ix, p.iy];
+  input.padSprint = p.sprint;
+  if (iconsUp(s)) {
+    ICON_BUTTONS.forEach((b, i) => {
+      if (p.pressed.has(b)) input.beginHold(i + 1);
+      if (p.released.has(b)) input.endHold(i + 1);
+    });
+    return;
+  }
+  const flags = userFlags(s);
+  const carrier = (flags & FLAG.Carrier) !== 0;
+  if (p.pressed.has(PAD.A)) input.press(BTN.Action);
+  if (p.pressed.has(PAD.X)) input.press(BTN.Spin);
+  if (p.pressed.has(PAD.B)) input.press(carrier ? BTN.Stiff : BTN.Switch);
+  if (p.pressed.has(PAD.Y)) input.press(BTN.FairCatch);
+}
+
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 
 function handleEvents(s: Session, events: GameEvent[]) {
   for (const e of events) {
+    if (e.type === 'flag') s.stadium.addFlag(Number(e.x), Number(e.y));
     if (s.attract) continue;
     switch (e.type) {
       case 'banner':
@@ -268,6 +404,10 @@ function handleEvents(s: Session, events: GameEvent[]) {
         break;
       case 'throw':
         sfx.throwBall();
+        break;
+      case 'kick':
+        sfx.hit(false);
+        sfx.roar(0.2);
         break;
       case 'catch':
         sfx.catchBall();
@@ -288,6 +428,10 @@ function handleEvents(s: Session, events: GameEvent[]) {
         break;
       case 'incomplete':
       case 'out_of_bounds':
+      case 'touchback':
+      case 'fair_catch':
+      case 'two_minute_warning':
+      case 'flag':
         sfx.whistle();
         break;
       case 'touchdown':
@@ -301,7 +445,11 @@ function handleEvents(s: Session, events: GameEvent[]) {
         sfx.roar(0.12);
         break;
       case 'field_goal':
+      case 'extra_point':
         sfx.roar(e.good ? 0.6 : 0.1);
+        break;
+      case 'overtime':
+        sfx.roar(0.5);
         break;
     }
   }
@@ -313,18 +461,26 @@ function handleEvents(s: Session, events: GameEvent[]) {
 
 function contextHint(s: Session): string {
   const h = s.hud;
+  const pad = usingPad;
   if (h.phase !== 'inplay') return '';
-  const u = s.players.userIndex;
-  const flags = u >= 0 ? s.cur[u * STRIDE + 6] : 0;
-  const iconsUp = Array.from({ length: N }, (_, i) => s.cur[i * STRIDE + 7]).some((v) => v > 0);
+  if (meterActive(s)) return '';
+  const flags = userFlags(s);
+  const up = iconsUp(s);
   if (h.play_phase === 'presnap') {
-    return h.user_side === 'offense' ? 'SPACE  snap the ball' : 'TAB  switch player  ·  waiting for the snap';
+    if (h.special) return h.user_side === 'offense' ? '' : 'Get ready…';
+    return h.user_side === 'offense'
+      ? `${pad ? 'A' : 'SPACE'}  snap the ball  ·  ${pad ? '' : 'T  timeout'}`
+      : `${pad ? 'B' : 'TAB'}  switch player  ·  waiting for the snap`;
   }
   if (h.play_phase === 'over') return '';
-  if (flags & FLAG.Carrier && !iconsUp) return 'SHIFT sprint  ·  SPACE juke  ·  Q spin  ·  E stiff arm';
-  if (iconsUp) return '1–5 or click a receiver to throw  ·  tap = bullet, hold = lob';
-  if (h.user_side === 'defense' || !(flags & FLAG.Offense)) return 'TAB switch  ·  SPACE dive  ·  SHIFT sprint';
-  return 'SHIFT sprint';
+  if (h.kneel_window) return `${pad ? 'A' : 'SPACE'}  take a knee (touchback)`;
+  if ((h.special === 'punt' || h.special === 'kickoff') && h.user_side === 'defense' && !(flags & FLAG.Carrier)) {
+    return h.special === 'punt' ? `Get under it  ·  ${pad ? 'Y' : 'F'}  fair catch` : 'Get under the kick!';
+  }
+  if (flags & FLAG.Carrier && !up) return pad ? 'RT sprint  ·  A juke  ·  X spin  ·  B stiff arm' : 'SHIFT sprint  ·  SPACE juke  ·  Q spin  ·  E stiff arm';
+  if (up) return pad ? 'A B X Y RB  throw  ·  tap = bullet, hold = lob' : '1–5 or click a receiver to throw  ·  tap = bullet, hold = lob';
+  if (h.user_side === 'defense' || !(flags & FLAG.Offense)) return pad ? 'B switch  ·  A dive  ·  RT sprint' : 'TAB switch  ·  SPACE dive  ·  SHIFT sprint';
+  return pad ? 'RT sprint' : 'SHIFT sprint';
 }
 
 function loop(now: number) {
@@ -337,6 +493,7 @@ function frame(now: number, draw = true) {
   last = now;
   time += dt;
   const s = session;
+  handlePad(pads.poll(dt), s);
   if (!s || !renderer) return;
 
   // Fixed-step simulation.
@@ -347,7 +504,7 @@ function frame(now: number, draw = true) {
       const fi = input.consume();
       const [mx, my] = s.cam.screenToField(fi.ix, fi.iy);
       s.prev.set(s.cur);
-      s.game.step(STEP, mx, my, first ? fi.buttons : fi.buttons & 1, first ? fi.throwTo : 0, fi.throwKind);
+      s.game.step(STEP, mx, my, first ? fi.buttons : fi.buttons & BTN.Sprint, first ? fi.throwTo : 0, fi.throwKind);
       s.cur = s.game.snapshot();
       acc -= STEP;
       first = false;
@@ -359,8 +516,10 @@ function frame(now: number, draw = true) {
   if (s.hud.lineup !== s.lineup) applyLineup(s);
   handleEvents(s, JSON.parse(s.game.events()) as GameEvent[]);
 
+  s.players.padIcons = usingPad;
   s.players.update(s.prev, s.cur, alpha, dt, time);
-  s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, s.hud.to_go !== 'Goal', s.hud.down, s.hud.dir);
+  const scrimmageLines = s.hud.situation !== 'kickoff' && !s.hud.special;
+  s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, scrimmageLines && s.hud.to_go !== 'Goal', s.hud.down, s.hud.dir);
   s.stadium.setScoreboard(s.hud);
   s.players.excitement = sfx.level;
   s.stadium.update(time, s.attract ? 0.1 : sfx.level);
@@ -383,26 +542,42 @@ function frame(now: number, draw = true) {
     ui.hint(contextHint(s));
     ui.throwMeter(input.holdProgress());
 
+    // Kick meter for the user's kicks.
+    const kicking = meterActive(s);
+    const title = { kickoff: 'KICKOFF', punt: 'PUNT', fg: 'FIELD GOAL', pat: 'EXTRA POINT', '': 'KICK' }[h.special] ?? 'KICK';
+    meter.show(kicking, title);
+    if (kicking) meter.update(dt);
+
     // Play calling.
-    if (h.phase === 'playcall' && h.user_side !== 'none' && !s.paused) {
+    if (h.phase === 'playcall' && h.user_choosing && !s.paused) {
       s.menuDelay += dt;
       if (!ui.menuOpen && s.menuDelay > 0.9) {
         const items = JSON.parse(s.game.menu()) as MenuItem[];
-        ui.openMenu(items, h, s.teams, (idx) => {
-          sfx.ui();
-          s.game.call_play(idx);
-        });
+        if (items.length) {
+          ui.openMenu(
+            items,
+            h,
+            s.teams,
+            (idx) => {
+              sfx.ui();
+              s.game.call_play(idx);
+            },
+            h.situation === 'scrimmage' ? () => callTimeout(s) : null,
+          );
+        }
       }
     } else {
-      s.menuDelay = 0;
-      if (ui.menuOpen && h.phase !== 'playcall') ui.closeMenu();
+      s.menuDelay = Math.min(s.menuDelay, 0);
+      if (ui.menuOpen && (h.phase !== 'playcall' || !h.user_choosing)) ui.closeMenu();
     }
 
-    if (h.phase === 'final') {
+    if (h.phase === 'final' && !s.finalShown) {
       s.finalDelay += dt;
-      if (s.finalDelay > 2.5 && s.finalDelay - dt <= 2.5) {
+      if (s.finalDelay > 2.5) {
+        s.finalShown = true;
         input.enabled = false;
-        ui.showFinal(h, s.teams, () => quitToTitle());
+        const stats = JSON.parse(s.game.stats()) as TeamStatLine[];
+        ui.showFinal(h, s.teams, stats, () => quitToTitle());
       }
     }
 
@@ -424,6 +599,10 @@ function frame(now: number, draw = true) {
 window.addEventListener('resize', () => {
   applyQuality();
   session?.cam.setAspect(window.innerWidth / window.innerHeight);
+});
+window.addEventListener('gamepadconnected', () => {
+  usingPad = true;
+  if (session && !session.attract) ui.banner('CONTROLLER CONNECTED', 'info');
 });
 
 // ---------------------------------------------------------------------------
@@ -466,11 +645,19 @@ async function boot() {
 
 void boot();
 
-// Dev-only test hook: advance the game by N seconds even when the tab is in the
+// Installable offline app: cache the game after the first visit.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./sw.js').catch((err) => console.warn('Service worker not registered', err));
+  });
+}
+
+// Dev-only test hooks: advance the game by N seconds even when the tab is in the
 // background (browsers pause requestAnimationFrame for hidden tabs).
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__sf = {
     hud: () => session?.hud,
+    game: () => session?.game,
     /** Show a painted uniform atlas full-size on the page (for checking textures). */
     async atlas(teamIdx = 0, number = 27, home = true) {
       const { paintUniform, SKIN_TONES } = await import('./render/athlete');
