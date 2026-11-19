@@ -3,25 +3,29 @@
 Each milestone ends with something playable on GitHub Pages. The PC (Bevy) client
 starts after Milestone 1, once the core API has settled, and then keeps pace with the web build.
 
-## M0 — Foundation ← *current*
-- [x] Design doc, roadmap, proposed league
-- [x] Rust workspace: `sf-core` (simulation) + `sf-wasm` (browser bindings)
-- [x] Vite + TypeScript + Three.js web client that loads the WebAssembly core
-- [x] PS2-retro field and stadium, plus 22 low-poly players with procedural run animation
-- [x] Play loop: call a play → snap → run/pass → tackle → down and distance → next play
-- [x] User-controlled offense (QB, then ball carrier) and defense (switchable defender)
-- [x] Bucket-passing solver with tap/hold throws, 1–5 keys or click-to-throw
-- [x] CPU offense and defense play-calling, CPU QB reads, pursuit, blocking, coverage
-- [x] Score bug, clock, quarters, touchdowns, punts and field goals (auto-resolved)
-- [x] GitHub Actions workflow that builds the WebAssembly core and deploys to Pages
+## M0 — Foundation ✅
+Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibition, Pages deploy.
 
-## M1 — Exhibition game
-- Kickoffs, punts, field goals, PATs and 2-point tries played on the field
-- Full clock rules, timeouts, two-minute warning, overtime
-- Penalties (first set: false start, offside, holding, pass interference) + sliders
-- Bigger playbooks (several formations and personnel groups per scheme)
-- Menus: team select, settings, sliders, controls; Xbox controller support on web
-- Quality presets with auto-detection; installable offline web app
+## M1 — Exhibition game ✅ *(current)*
+- [x] Kickoffs (deep, squib, onside), punts and field goals played on the field, with a
+      three-press power/accuracy kick meter, returns, fair catches, touchbacks, muffs,
+      onside recoveries and blocked kicks
+- [x] Extra points and 2-point tries
+- [x] Clock rules: two-minute warning, out-of-bounds stops late in halves, hurry-up and
+      clock-killing pace, kneel and spike
+- [x] Timeouts (3 per half, 2 in overtime); the CPU uses them when trailing
+- [x] Overtime: both teams get a possession, then sudden death; ties possible
+- [x] Penalties: false start, offside, offensive/defensive holding, pass interference,
+      with accept/decline logic and half-the-distance; frequency slider
+- [x] Bigger playbooks: 8 formations / 4 personnel groups, about 40 offensive plays
+      (toss, counter, FB dive, QB sneak, HB screen, bootleg, stick, Y-cross, dagger...),
+      17 defensive calls across 4-3, Nickel, Dime and Goal Line
+- [x] Formation-first play-call menu with tabs and a timeout button
+- [x] Difficulty (Rookie → Legend), penalty and overtime settings
+- [x] Xbox Series X|S / Xbox 360 controller support (receiver icons switch to A/B/X/Y/RB)
+- [x] Installable offline web app (manifest + service worker)
+- [x] Quality presets with auto-detection
+- Known for M2: kick returns average about 13 yards (low); scoring runs a bit low in short games.
 
 ## M2 — Feel
 - Physics tackling (Rapier): hit angles, momentum, gang tackles, big-hit fumbles

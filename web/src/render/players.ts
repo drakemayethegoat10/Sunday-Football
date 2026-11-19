@@ -70,22 +70,26 @@ function softTexture(): THREE.CanvasTexture {
   return new THREE.CanvasTexture(cv);
 }
 
-function iconTexture(i: number): THREE.CanvasTexture {
+const PAD_LABELS = ['A', 'B', 'X', 'Y', 'RB'];
+const PAD_COLORS = ['#2fbf4a', '#e0362f', '#2f7bff', '#f2c200', '#6b7380'];
+
+function iconTexture(i: number, pad = false): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = 64;
   const g = cv.getContext('2d')!;
   g.beginPath();
   g.arc(32, 32, 27, 0, Math.PI * 2);
-  g.fillStyle = ICON_COLORS[i - 1];
+  g.fillStyle = pad ? PAD_COLORS[i - 1] : ICON_COLORS[i - 1];
   g.fill();
   g.lineWidth = 5;
   g.strokeStyle = '#ffffff';
   g.stroke();
   g.fillStyle = '#ffffff';
-  g.font = 'bold 34px Arial Black, Impact, sans-serif';
+  const label = pad ? PAD_LABELS[i - 1] : String(i);
+  g.font = `bold ${label.length > 1 ? 24 : 34}px Arial Black, Impact, sans-serif`;
   g.textAlign = 'center';
   g.textBaseline = 'middle';
-  g.fillText(String(i), 32, 34);
+  g.fillText(label, 32, 34);
   const t = new THREE.CanvasTexture(cv);
   t.colorSpace = THREE.SRGBColorSpace;
   return t;
@@ -287,6 +291,9 @@ export class Players {
   private rigs: Rig[] = [];
   private icons: THREE.Sprite[] = [];
   private iconMats: THREE.SpriteMaterial[] = [];
+  private iconMatsPad: THREE.SpriteMaterial[] = [];
+  /** Show controller button labels (A/B/X/Y/RB) instead of numbers on receivers. */
+  padIcons = false;
   private ring: THREE.Mesh;
   private ball: THREE.Group;
   private ballShadow: THREE.Mesh;
@@ -332,7 +339,10 @@ export class Players {
       this.group.add(m);
     }
 
-    for (let i = 1; i <= 5; i++) this.iconMats.push(new THREE.SpriteMaterial({ map: iconTexture(i), depthTest: false }));
+    for (let i = 1; i <= 5; i++) {
+      this.iconMats.push(new THREE.SpriteMaterial({ map: iconTexture(i), depthTest: false }));
+      this.iconMatsPad.push(new THREE.SpriteMaterial({ map: iconTexture(i, true), depthTest: false }));
+    }
     for (let i = 0; i < N; i++) {
       const s = new THREE.Sprite(this.iconMats[0]);
       s.scale.set(0.95, 0.95, 1);
@@ -445,7 +455,7 @@ export class Players {
       const ic = this.icons[i];
       if (icon > 0) {
         ic.visible = true;
-        ic.material = this.iconMats[icon - 1];
+        ic.material = (this.padIcons ? this.iconMatsPad : this.iconMats)[icon - 1];
         ic.position.set(x, 2.85, -y);
       } else {
         ic.visible = false;

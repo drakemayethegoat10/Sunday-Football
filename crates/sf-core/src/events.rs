@@ -32,6 +32,16 @@ pub enum Event {
     QuarterEnd { quarter: u8 },
     Halftime,
     Final,
+    /// A penalty flag thrown at field position (x, y).
+    Flag { x: f32, y: f32 },
+    /// The ball was kicked (kickoff, punt, field goal).
+    Kick,
+    FairCatch,
+    Touchback,
+    Timeout { team: u8 },
+    TwoMinuteWarning,
+    Overtime,
+    Penalty { text: String },
     /// Big centered text. `style` is a CSS hint: "good", "bad", "info".
     Banner { text: String, style: String },
     /// One line of play-by-play.

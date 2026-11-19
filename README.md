@@ -13,15 +13,19 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the design and [docs/ROADMAP.md](docs/R
 
 ## Controls (web)
 
-| Action | Key |
-|---|---|
-| Move / sprint | WASD or arrows / Shift |
-| Snap · juke · dive | Space |
-| Spin · stiff arm | Q · E |
-| Throw | 1–5 or click a receiver (tap = bullet, hold = lob) |
-| Switch defender | Tab |
-| Camera · zoom | V · `-` `=` |
-| Pause / controls | Esc |
+| Action | Keyboard | Xbox controller |
+|---|---|---|
+| Move / sprint | WASD or arrows / Shift | Left stick / RT |
+| Snap · juke · dive | Space | A |
+| Spin · stiff arm | Q · E | X · B |
+| Throw | 1–5 or click a receiver (tap = bullet, hold = lob) | A B X Y RB |
+| Switch defender | Tab | B |
+| Kick meter | Space ×3 | A ×3 |
+| Fair catch · timeout | F · T | Y |
+| Camera · zoom | V · `-` `=` | View |
+| Pause / controls | Esc | Menu |
+
+The game can be installed as an app (Chrome's install button in the address bar) and then works offline.
 
 ## Building locally
 

@@ -5,7 +5,7 @@ use sf_core::game::{Game, Phase, Settings};
 use sf_core::sim::{Input, PlayPhase};
 
 fn run(seed: u64, off_call: usize, throw_at: f32, throw_to: u8, kind: u8, wiggle: bool) {
-    let s = Settings { quarter_len: 120.0, runoff: 15.0, user_team: Some(0) };
+    let s = Settings { quarter_len: 120.0, runoff: 15.0, user_team: Some(0), ..Default::default() };
     let mut g = Game::new(seed, s, ["SAR", "HOU"], [1.0, 0.0]);
     let mut snap = Vec::new();
     let mut steps = 0u64;
@@ -15,13 +15,18 @@ fn run(seed: u64, off_call: usize, throw_at: f32, throw_to: u8, kind: u8, wiggle
         assert!(steps < 3_000_000, "seed {seed}: game never finished");
         let mut input = Input::default();
         match g.phase {
-            Phase::PlayCall => {
+            Phase::PlayCall if g.user_must_choose() => {
                 let off = g.user_on_offense() == Some(true);
                 g.call_play(if off { off_call } else { (steps % 5) as usize });
                 thrown = false;
                 continue;
             }
             _ => {}
+        }
+        // Feed the kick meter whenever the user has to kick.
+        if g.phase == Phase::InPlay && g.play.phase == PlayPhase::PreSnap && g.play.special.is_some() {
+            let k = (steps % 7) as f32 / 7.0;
+            g.set_kick(0.55 + k * 0.45, (k - 0.5) * 0.6);
         }
         let user_off = g.user_on_offense() == Some(true);
         match g.play.phase {

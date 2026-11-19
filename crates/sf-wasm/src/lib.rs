@@ -11,6 +11,7 @@ pub const BTN_ACTION: u32 = 2;
 pub const BTN_SPIN: u32 = 4;
 pub const BTN_STIFF: u32 = 8;
 pub const BTN_SWITCH: u32 = 16;
+pub const BTN_FAIR_CATCH: u32 = 32;
 
 #[wasm_bindgen]
 pub struct WebGame {
@@ -21,12 +22,17 @@ pub struct WebGame {
 #[wasm_bindgen]
 impl WebGame {
     /// `user_team`: 0 or 1 for the human's team, -1 for CPU vs CPU.
+    /// `difficulty`: 0 Rookie .. 3 Legend. `penalties`: 0 off, 1 normal, 2 strict.
     #[wasm_bindgen(constructor)]
-    pub fn new(seed: u32, home: &str, away: &str, quarter_minutes: f32, user_team: i32) -> WebGame {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(seed: u32, home: &str, away: &str, quarter_minutes: f32, user_team: i32, difficulty: u8, penalties: f32, overtime: bool) -> WebGame {
         let settings = Settings {
             quarter_len: (quarter_minutes * 60.0).clamp(60.0, 900.0),
             runoff: 15.0,
             user_team: if (0..=1).contains(&user_team) { Some(user_team as u8) } else { None },
+            difficulty: difficulty.min(3),
+            penalties: penalties.clamp(0.0, 3.0),
+            overtime,
         };
         WebGame { game: Game::new(seed as u64, settings, [home, away], [1.0, 0.0]), snap: Vec::with_capacity(256) }
     }
@@ -43,6 +49,7 @@ impl WebGame {
             switch: buttons & BTN_SWITCH != 0,
             throw_to,
             throw_kind,
+            fair_catch: buttons & BTN_FAIR_CATCH != 0,
         };
         self.game.step(dt, &input);
     }
@@ -71,5 +78,23 @@ impl WebGame {
 
     pub fn call_play(&mut self, idx: u32) {
         self.game.call_play(idx as usize);
+    }
+
+    /// Kick meter result: power 0–1, accuracy -1 (hook) .. 1 (slice).
+    pub fn kick(&mut self, power: f32, accuracy: f32) {
+        self.game.set_kick(power, accuracy);
+    }
+
+    /// The human calls a timeout. Returns true if it was granted.
+    pub fn timeout(&mut self) -> bool {
+        match self.game.settings.user_team {
+            Some(u) => self.game.call_timeout(u),
+            None => false,
+        }
+    }
+
+    /// End-of-game box score as JSON.
+    pub fn stats(&self) -> String {
+        serde_json::to_string(&self.game.stats).unwrap_or_else(|_| "[]".into())
     }
 }

@@ -6,6 +6,8 @@
     <meta name="description" content="Sunday Football: an original pro football game that runs in your browser." />
     <meta name="theme-color" content="#0b1a2e" />
     <title>Sunday Football</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="./icon-192.png" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cellipse cx='32' cy='32' rx='28' ry='17' fill='%238b4a22' transform='rotate(-30 32 32)'/%3E%3Cpath d='M22 38 L42 26' stroke='white' stroke-width='3'/%3E%3C/svg%3E" />
   </head>
   <body>
@@ -16,7 +18,7 @@
       <section id="title" class="screen">
         <div class="title-card">
           <h1 class="logo"><span>SUNDAY</span><span>FOOTBALL</span></h1>
-          <p class="tagline">Exhibition · Milestone 0 preview</p>
+          <p class="tagline">Exhibition · Milestone 1</p>
 
           <div class="matchup">
             <div class="team-pick" id="pick-home">
@@ -47,6 +49,28 @@
                 <option value="12">12 min</option>
               </select>
             </label>
+            <label>Difficulty
+              <select id="opt-difficulty">
+                <option value="0">Rookie</option>
+                <option value="1" selected>Pro</option>
+                <option value="2">All-Pro</option>
+                <option value="3">Legend</option>
+              </select>
+            </label>
+            <label>Penalties
+              <select id="opt-penalties">
+                <option value="0">Off</option>
+                <option value="0.5">Low</option>
+                <option value="1" selected>Normal</option>
+                <option value="2">Strict</option>
+              </select>
+            </label>
+            <label>Overtime
+              <select id="opt-ot">
+                <option value="1" selected>On</option>
+                <option value="0">Off (ties)</option>
+              </select>
+            </label>
             <label>Graphics
               <select id="opt-quality">
                 <option value="auto" selected>Auto (PS2, drops if slow)</option>
@@ -59,7 +83,7 @@
           </div>
 
           <button id="kickoff" class="big-btn">KICK OFF</button>
-          <p class="hint-small">Press <kbd>Enter</kbd> to start · <kbd>H</kbd> in game for controls</p>
+          <p class="hint-small">Press <kbd>Enter</kbd> or controller <kbd>Start</kbd> to play · <kbd>H</kbd> in game for controls</p>
           <p id="load-status" class="hint-small"></p>
         </div>
       </section>
@@ -68,14 +92,19 @@
       <div id="hud" hidden>
         <div id="scorebug">
           <div class="sb-league"><span>SFL</span></div>
-          <div class="sb-team" id="sb-away"><span class="sb-abbr"></span><span class="sb-poss" title="Possession"></span><span class="sb-score"></span></div>
-          <div class="sb-team" id="sb-home"><span class="sb-abbr"></span><span class="sb-poss" title="Possession"></span><span class="sb-score"></span></div>
+          <div class="sb-team" id="sb-away"><span class="sb-abbr"></span><span class="sb-poss" title="Possession"></span><span class="sb-tos" title="Timeouts"></span><span class="sb-score"></span></div>
+          <div class="sb-team" id="sb-home"><span class="sb-abbr"></span><span class="sb-poss" title="Possession"></span><span class="sb-tos" title="Timeouts"></span><span class="sb-score"></span></div>
           <div class="sb-clock"><span id="sb-q"></span><span id="sb-time"></span></div>
           <div class="sb-down" id="sb-down"></div>
         </div>
         <div id="banner"></div>
         <div id="hint"></div>
         <div id="throw-meter"><div></div></div>
+        <div id="kick-meter" hidden>
+          <div class="km-title">KICK</div>
+          <div class="km-bar"><div class="km-fill"></div><div class="km-sweet"></div><div class="km-needle"></div></div>
+          <div class="km-label"></div>
+        </div>
         <div id="lower-third">
           <div class="lt-tag">PLAY-BY-PLAY</div>
           <div id="ticker"></div>
@@ -88,9 +117,11 @@
         <div class="pc-head">
           <div class="pc-title"></div>
           <div class="pc-sit"></div>
+          <button id="pc-timeout" class="pc-to" hidden>Timeout</button>
         </div>
+        <div class="pc-tabs"></div>
         <div class="pc-grid"></div>
-        <div class="pc-foot"><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> select · <kbd>Enter</kbd> call it · or click a play</div>
+        <div class="pc-foot"><kbd>Q</kbd><kbd>E</kbd> / <kbd>LB</kbd><kbd>RB</kbd> formation · arrows / D-pad select · <kbd>Enter</kbd> / <kbd>A</kbd> call it</div>
       </section>
 
       <!-- Pause / help -->
@@ -107,14 +138,18 @@
           <div class="controls">
             <h3>Controls</h3>
             <table>
-              <tr><td><kbd>W A S D</kbd> / arrows</td><td>Move</td></tr>
-              <tr><td><kbd>Shift</kbd></td><td>Sprint</td></tr>
-              <tr><td><kbd>Space</kbd></td><td>Snap · Juke · Dive tackle</td></tr>
-              <tr><td><kbd>Q</kbd> / <kbd>E</kbd></td><td>Spin / Stiff arm</td></tr>
-              <tr><td><kbd>1</kbd>–<kbd>5</kbd> or click receiver</td><td>Throw (tap = bullet, hold = lob)</td></tr>
-              <tr><td><kbd>Tab</kbd></td><td>Switch defender</td></tr>
-              <tr><td><kbd>V</kbd> · <kbd>-</kbd> <kbd>=</kbd></td><td>Camera view · zoom</td></tr>
-              <tr><td><kbd>Esc</kbd> / <kbd>P</kbd></td><td>Pause</td></tr>
+              <tr><th></th><th>Keyboard</th><th>Controller</th></tr>
+              <tr><td>Move</td><td><kbd>W A S D</kbd> / arrows</td><td>Left stick / D-pad</td></tr>
+              <tr><td>Sprint</td><td><kbd>Shift</kbd></td><td><kbd>RT</kbd></td></tr>
+              <tr><td>Snap · juke · dive</td><td><kbd>Space</kbd></td><td><kbd>A</kbd></td></tr>
+              <tr><td>Spin / stiff arm</td><td><kbd>Q</kbd> / <kbd>E</kbd></td><td><kbd>X</kbd> / <kbd>B</kbd></td></tr>
+              <tr><td>Throw (tap bullet, hold lob)</td><td><kbd>1</kbd>–<kbd>5</kbd> or click</td><td><kbd>A</kbd><kbd>B</kbd><kbd>X</kbd><kbd>Y</kbd><kbd>RB</kbd></td></tr>
+              <tr><td>Switch defender</td><td><kbd>Tab</kbd></td><td><kbd>B</kbd></td></tr>
+              <tr><td>Kick meter</td><td><kbd>Space</kbd> ×3</td><td><kbd>A</kbd> ×3</td></tr>
+              <tr><td>Fair catch</td><td><kbd>F</kbd></td><td><kbd>Y</kbd></td></tr>
+              <tr><td>Timeout</td><td><kbd>T</kbd></td><td><kbd>Y</kbd> (play call)</td></tr>
+              <tr><td>Camera · zoom</td><td><kbd>V</kbd> · <kbd>-</kbd> <kbd>=</kbd></td><td><kbd>View</kbd></td></tr>
+              <tr><td>Pause</td><td><kbd>Esc</kbd></td><td><kbd>Menu</kbd></td></tr>
             </table>
           </div>
         </div>
@@ -125,6 +160,7 @@
         <div class="title-card small">
           <h2>FINAL</h2>
           <div id="final-score"></div>
+          <div id="final-box"></div>
           <button id="again" class="big-btn">PLAY AGAIN</button>
         </div>
       </section>

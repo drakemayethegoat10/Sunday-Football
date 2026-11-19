@@ -11,6 +11,7 @@ pub mod player;
 pub mod playbook;
 pub mod rng;
 pub mod sim;
+pub mod special;
 
 pub use events::Event;
 pub use game::{Game, Settings};

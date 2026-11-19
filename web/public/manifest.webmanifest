@@ -1,0 +1,15 @@
+{
+  "name": "Sunday Football",
+  "short_name": "Sunday Football",
+  "description": "An original pro football game: exhibition games now, deep franchise mode coming.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#0b1a2e",
+  "theme_color": "#0b1a2e",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
