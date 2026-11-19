@@ -1,0 +1,9 @@
+[package]
+name = "sf-core"
+description = "Sunday Football simulation core: rules, on-field sim, AI, franchise. No graphics."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

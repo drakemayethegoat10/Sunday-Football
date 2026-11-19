@@ -1,0 +1,48 @@
+{
+  "league": { "name": "Sunday Football League", "abbr": "SFL" },
+  "conferences": [
+    { "name": "Liberty Conference", "abbr": "LC", "divisions": ["Atlantic", "Coastal", "Southern", "Lakes"] },
+    { "name": "Frontier Conference", "abbr": "FC", "divisions": ["Gulf", "Plains", "Desert", "Pacific"] }
+  ],
+  "teams": [
+    { "id": "BOS", "city": "Boston", "name": "Clippers", "conf": 0, "div": "Atlantic", "primary": "#14284b", "secondary": "#f2efe6", "accent": "#b5893b" },
+    { "id": "BKN", "city": "Brooklyn", "name": "Knights", "conf": 0, "div": "Atlantic", "primary": "#111111", "secondary": "#b8bcc2", "accent": "#2f5bd3" },
+    { "id": "PHI", "city": "Philadelphia", "name": "Founders", "conf": 0, "div": "Atlantic", "primary": "#1f3f7a", "secondary": "#efe6cf", "accent": "#a33a2a" },
+    { "id": "RIC", "city": "Richmond", "name": "Rapids", "conf": 0, "div": "Atlantic", "primary": "#127c80", "secondary": "#4a5560", "accent": "#ffffff" },
+
+    { "id": "SAR", "city": "Sarasota", "name": "Seaman", "conf": 0, "div": "Coastal", "primary": "#0d2240", "secondary": "#5fd3b5", "accent": "#ffffff", "placeholder_branding": true },
+    { "id": "ORL", "city": "Orlando", "name": "Comets", "conf": 0, "div": "Coastal", "primary": "#2a1650", "secondary": "#ff7a1a", "accent": "#ffffff" },
+    { "id": "MIA", "city": "Miami", "name": "Flamingos", "conf": 0, "div": "Coastal", "primary": "#ff5fa2", "secondary": "#19c3c9", "accent": "#111111" },
+    { "id": "RAL", "city": "Raleigh", "name": "Oaks", "conf": 0, "div": "Coastal", "primary": "#1d4d2b", "secondary": "#7a5230", "accent": "#e1b23c" },
+
+    { "id": "BIR", "city": "Birmingham", "name": "Forge", "conf": 0, "div": "Southern", "primary": "#4b4f54", "secondary": "#ff6a13", "accent": "#111111" },
+    { "id": "MEM", "city": "Memphis", "name": "Hounds", "conf": 0, "div": "Southern", "primary": "#1e4fa3", "secondary": "#f1c232", "accent": "#ffffff" },
+    { "id": "NSH", "city": "Nashville", "name": "Pickers", "conf": 0, "div": "Southern", "primary": "#d9661f", "secondary": "#141414", "accent": "#f3e9d2" },
+    { "id": "LOU", "city": "Louisville", "name": "Thoroughbreds", "conf": 0, "div": "Southern", "primary": "#b3121b", "secondary": "#111111", "accent": "#d4af37" },
+
+    { "id": "COL", "city": "Columbus", "name": "Explorers", "conf": 0, "div": "Lakes", "primary": "#c8102e", "secondary": "#13294b", "accent": "#ffffff" },
+    { "id": "DET", "city": "Detroit", "name": "Mechanics", "conf": 0, "div": "Lakes", "primary": "#3c6e9e", "secondary": "#c9ced4", "accent": "#f47a20" },
+    { "id": "MIL", "city": "Milwaukee", "name": "Muskies", "conf": 0, "div": "Lakes", "primary": "#2e6b4f", "secondary": "#b9c0c4", "accent": "#111111" },
+    { "id": "CHI", "city": "Chicago", "name": "Gale", "conf": 0, "div": "Lakes", "primary": "#6fb6e8", "secondary": "#33383d", "accent": "#ffffff" },
+
+    { "id": "HOU", "city": "Houston", "name": "Wildcatters", "conf": 1, "div": "Gulf", "primary": "#141414", "secondary": "#d7261e", "accent": "#ffffff" },
+    { "id": "SA", "city": "San Antonio", "name": "Vaqueros", "conf": 1, "div": "Gulf", "primary": "#1fa3a3", "secondary": "#b8bcc2", "accent": "#c8a77a" },
+    { "id": "AUS", "city": "Austin", "name": "Armadillos", "conf": 1, "div": "Gulf", "primary": "#c75b12", "secondary": "#e3d3b0", "accent": "#5a3a22" },
+    { "id": "NO", "city": "New Orleans", "name": "Krewe", "conf": 1, "div": "Gulf", "primary": "#5b2a86", "secondary": "#1f8a3b", "accent": "#e3b53a" },
+
+    { "id": "OKC", "city": "Oklahoma City", "name": "Twisters", "conf": 1, "div": "Plains", "primary": "#5a6068", "secondary": "#ffe14a", "accent": "#16234a" },
+    { "id": "OMA", "city": "Omaha", "name": "Plainsmen", "conf": 1, "div": "Plains", "primary": "#d6a72e", "secondary": "#5a3a22", "accent": "#ffffff" },
+    { "id": "KC", "city": "Kansas City", "name": "Smoke", "conf": 1, "div": "Plains", "primary": "#3a3d40", "secondary": "#d8352a", "accent": "#ffffff" },
+    { "id": "STL", "city": "St. Louis", "name": "Archers", "conf": 1, "div": "Plains", "primary": "#2848a8", "secondary": "#c3c7cc", "accent": "#c8102e" },
+
+    { "id": "PHX", "city": "Phoenix", "name": "Scorpions", "conf": 1, "div": "Desert", "primary": "#b4602f", "secondary": "#141414", "accent": "#e7d3a8" },
+    { "id": "ABQ", "city": "Albuquerque", "name": "Coyotes", "conf": 1, "div": "Desert", "primary": "#a8432f", "secondary": "#2bb3a8", "accent": "#d9c39a" },
+    { "id": "SLC", "city": "Salt Lake", "name": "Peaks", "conf": 1, "div": "Desert", "primary": "#2a6fb8", "secondary": "#ffffff", "accent": "#8a939b" },
+    { "id": "LV", "city": "Las Vegas", "name": "Jackpots", "conf": 1, "div": "Desert", "primary": "#39ff6a", "secondary": "#111111", "accent": "#d4af37" },
+
+    { "id": "SEA", "city": "Seattle", "name": "Sasquatch", "conf": 1, "div": "Pacific", "primary": "#1f4d2e", "secondary": "#6b4a2f", "accent": "#a9b0b5" },
+    { "id": "POR", "city": "Portland", "name": "Lumberjacks", "conf": 1, "div": "Pacific", "primary": "#b31b1b", "secondary": "#141414", "accent": "#2c5a3a" },
+    { "id": "SAC", "city": "Sacramento", "name": "Redwoods", "conf": 1, "div": "Pacific", "primary": "#8b2f1f", "secondary": "#d9a425", "accent": "#2f6b3a" },
+    { "id": "SD", "city": "San Diego", "name": "Sea Lions", "conf": 1, "div": "Pacific", "primary": "#1564b8", "secondary": "#ffd23f", "accent": "#ffffff" }
+  ]
+}
