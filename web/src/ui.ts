@@ -44,7 +44,7 @@ export class UI {
       const t = this.teams[idx];
       const el = $(`#${id} .team-name`);
       el.innerHTML = teamLabel(t);
-      el.style.background = `linear-gradient(180deg, ${t.primary}, ${t.secondary})`;
+      el.style.background = `linear-gradient(180deg, rgba(255,255,255,.4) 0%, rgba(255,255,255,.1) 48%, rgba(0,0,0,0) 52%, rgba(0,0,0,.3) 100%), linear-gradient(180deg, ${t.primary}, ${t.secondary})`;
     };
     const step = (which: 'home' | 'away', d: number) => {
       const n = this.teams.length;
@@ -88,7 +88,7 @@ export class UI {
 
   updateHud(h: Hud, teams: [TeamInfo, TeamInfo]) {
     const side = (el: HTMLElement, i: number) => {
-      el.style.background = `linear-gradient(180deg, ${teams[i].primary}, ${teams[i].secondary})`;
+      el.style.setProperty('--team', teams[i].primary);
       (el.querySelector('.sb-abbr') as HTMLElement).textContent = h.abbr[i];
       (el.querySelector('.sb-score') as HTMLElement).textContent = String(h.score[i]);
       el.classList.toggle('has-ball', h.possession === i && h.phase !== 'final');
@@ -114,11 +114,11 @@ export class UI {
   }
 
   ticker(text: string) {
-    const el = $('#ticker');
-    el.textContent = text;
-    el.classList.add('show');
+    $('#ticker').textContent = text;
+    const bar = $('#lower-third');
+    bar.classList.add('show');
     clearTimeout(this.tickerTimer);
-    this.tickerTimer = window.setTimeout(() => el.classList.remove('show'), 5200);
+    this.tickerTimer = window.setTimeout(() => bar.classList.remove('show'), 5200);
   }
 
   throwMeter(p: number) {
@@ -141,7 +141,7 @@ export class UI {
     if (this.sel >= items.length) this.sel = 0;
     const off = h.user_side === 'offense';
     const team = teams[h.possession];
-    $('#playcall .pc-title').textContent = off ? `${team.name.toUpperCase()} OFFENSE` : 'CALL YOUR DEFENSE';
+    $('#playcall .pc-title').textContent = off ? `${team.city} ${team.name} · Offense` : 'Call your defense';
     $('#playcall .pc-sit').textContent = `${ordinal(h.down)} & ${h.to_go} at ${h.spot} · Q${h.quarter} ${fmtClock(h.clock)}`;
     const grid = $('#playcall .pc-grid');
     grid.innerHTML = '';

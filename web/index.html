@@ -49,11 +49,11 @@
             </label>
             <label>Graphics
               <select id="opt-quality">
-                <option value="auto" selected>Auto</option>
-                <option value="low">Low (fastest)</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-                <option value="ultra">Ultra</option>
+                <option value="auto" selected>Auto (PS2, drops if slow)</option>
+                <option value="low">Low 512×358</option>
+                <option value="ps2">PS2 640×448</option>
+                <option value="high">High 960×672</option>
+                <option value="ultra">Ultra (native)</option>
               </select>
             </label>
           </div>
@@ -64,18 +64,22 @@
         </div>
       </section>
 
-      <!-- In-game HUD -->
+      <!-- In-game HUD: early-2000s broadcast graphics package -->
       <div id="hud" hidden>
         <div id="scorebug">
-          <div class="sb-team" id="sb-away"><span class="sb-poss">◆</span><span class="sb-abbr"></span><span class="sb-score"></span></div>
-          <div class="sb-team" id="sb-home"><span class="sb-poss">◆</span><span class="sb-abbr"></span><span class="sb-score"></span></div>
+          <div class="sb-league"><span>SFL</span></div>
+          <div class="sb-team" id="sb-away"><span class="sb-abbr"></span><span class="sb-poss" title="Possession"></span><span class="sb-score"></span></div>
+          <div class="sb-team" id="sb-home"><span class="sb-abbr"></span><span class="sb-poss" title="Possession"></span><span class="sb-score"></span></div>
           <div class="sb-clock"><span id="sb-q"></span><span id="sb-time"></span></div>
           <div class="sb-down" id="sb-down"></div>
         </div>
         <div id="banner"></div>
-        <div id="ticker"></div>
         <div id="hint"></div>
         <div id="throw-meter"><div></div></div>
+        <div id="lower-third">
+          <div class="lt-tag">PLAY-BY-PLAY</div>
+          <div id="ticker"></div>
+        </div>
         <div id="fps" hidden></div>
       </div>
 
@@ -86,7 +90,7 @@
           <div class="pc-sit"></div>
         </div>
         <div class="pc-grid"></div>
-        <div class="pc-foot">Arrow keys + <kbd>Enter</kbd>, or click a play</div>
+        <div class="pc-foot"><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd> select · <kbd>Enter</kbd> call it · or click a play</div>
       </section>
 
       <!-- Pause / help -->

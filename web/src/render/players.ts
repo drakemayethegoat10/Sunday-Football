@@ -1,116 +1,73 @@
-// Low-poly, PS2-era players with procedural animation. Every joint blends toward a
-// target pose each frame, so transitions (run → juke → tackle) stay smooth.
+// On-field players (skinned low-poly athletes with procedural animation), sideline
+// squads, the ball, grounded shadows and the user/receiver markers.
 
 import * as THREE from 'three';
-import { ANIM, FLAG, LineupEntry, N, STRIDE, TeamInfo } from '../types';
+import { ANIM, FIELD_W, FLAG, LineupEntry, N, STRIDE, TeamInfo } from '../types';
+import {
+  BONE,
+  HIPS_REST_Y,
+  SKIN_TONES,
+  UniformColors,
+  buildBodyGeometry,
+  buildHelmetGeometry,
+  makeSkeleton,
+  paintUniform,
+} from './athlete';
 
-const SKIN = ['#f1c9a5', '#e0ac7e', '#c58c62', '#a8714a', '#8d5a3b', '#5a3a26'];
 const ICON_COLORS = ['#2f7bff', '#ff4040', '#2fcf5a', '#ffc400', '#b05cff'];
+
+/** Horizontal direction (three.js x/z) that floodlight shadows fall toward. */
+export const SHADOW_DIR = new THREE.Vector2(0.55, 0.835).normalize();
 
 function luminance(hex: string): number {
   const c = new THREE.Color(hex);
   return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
 }
 
-interface UniformColors {
-  jersey: string;
-  pants: string;
-  helmet: string;
-  stripe: string;
-  socks: string;
-  num: string;
-  numOutline: string;
-}
-
 export function uniformFor(team: TeamInfo, home: boolean): UniformColors {
+  const lightHelmet = luminance(team.primary) > 0.5;
+  const mask = lightHelmet ? '#2b2f36' : '#c9ced4';
   if (home) {
-    const numDark = luminance(team.primary) > 0.55;
     return {
       jersey: team.primary,
-      pants: luminance(team.secondary) > 0.6 ? team.secondary : '#e9e6dc',
+      trim: team.secondary,
+      pants: luminance(team.secondary) > 0.55 ? team.secondary : '#e6e2d6',
+      pantsStripe: team.primary,
       helmet: team.primary,
       stripe: team.secondary,
+      mask,
       socks: team.primary,
-      num: numDark ? '#111111' : '#ffffff',
+      num: luminance(team.primary) > 0.55 ? '#141414' : '#ffffff',
       numOutline: team.secondary,
+      glove: team.secondary,
     };
   }
   return {
-    jersey: '#f2f2ee',
-    pants: team.secondary,
+    jersey: '#f1f0ea',
+    trim: team.primary,
+    pants: team.primary,
+    pantsStripe: luminance(team.secondary) > 0.85 ? team.accent : team.secondary,
     helmet: team.primary,
     stripe: team.secondary,
+    mask,
     socks: team.primary,
     num: team.primary,
-    numOutline: luminance(team.secondary) > 0.8 ? '#222222' : team.secondary,
+    numOutline: luminance(team.secondary) > 0.85 ? '#1d1d1d' : team.secondary,
+    glove: team.primary,
   };
 }
 
-// ---------------------------------------------------------------------------
-// Shared geometry and textures
-// ---------------------------------------------------------------------------
-
-function boxDown(w: number, h: number, d: number): THREE.BoxGeometry {
-  const g = new THREE.BoxGeometry(w, h, d);
-  g.translate(0, -h / 2, 0);
-  return g;
-}
-
-const GEO = {
-  pelvis: new THREE.BoxGeometry(0.3, 0.24, 0.4),
-  torso: new THREE.BoxGeometry(0.34, 0.56, 0.44),
-  pads: new THREE.BoxGeometry(0.42, 0.2, 0.68),
-  thigh: boxDown(0.17, 0.46, 0.17),
-  shin: boxDown(0.13, 0.44, 0.13),
-  foot: new THREE.BoxGeometry(0.26, 0.08, 0.12),
-  upper: boxDown(0.13, 0.32, 0.13),
-  fore: boxDown(0.1, 0.3, 0.1),
-  helmet: new THREE.SphereGeometry(0.17, 8, 6),
-  mask: new THREE.BoxGeometry(0.06, 0.12, 0.22),
-  stripe: new THREE.BoxGeometry(0.33, 0.025, 0.05),
-  number: new THREE.PlaneGeometry(0.3, 0.3),
-  shadow: new THREE.CircleGeometry(0.45, 10),
-};
-
-const MAT_SHARED = {
-  mask: new THREE.MeshLambertMaterial({ color: '#9aa0a8', flatShading: true }),
-  shoe: new THREE.MeshLambertMaterial({ color: '#141414', flatShading: true }),
-  shadow: new THREE.MeshBasicMaterial({ color: '#000000', transparent: true, opacity: 0.35, depthWrite: false }),
-  skins: SKIN.map((c) => new THREE.MeshLambertMaterial({ color: c, flatShading: true })),
-};
-
-const numberTexCache = new Map<string, THREE.CanvasTexture>();
-function numberTexture(n: number, fill: string, outline: string): THREE.CanvasTexture {
-  const key = `${n}|${fill}|${outline}`;
-  let t = numberTexCache.get(key);
-  if (t) return t;
+function softTexture(): THREE.CanvasTexture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = 64;
   const g = cv.getContext('2d')!;
-  g.font = 'bold 44px Arial Black, Impact, sans-serif';
-  g.textAlign = 'center';
-  g.textBaseline = 'middle';
-  g.lineWidth = 7;
-  g.strokeStyle = outline;
-  g.strokeText(String(n), 32, 35);
-  g.fillStyle = fill;
-  g.fillText(String(n), 32, 35);
-  t = new THREE.CanvasTexture(cv);
-  t.colorSpace = THREE.SRGBColorSpace;
-  t.magFilter = THREE.NearestFilter;
-  numberTexCache.set(key, t);
-  return t;
-}
-
-const numberMatCache = new Map<string, THREE.MeshBasicMaterial>();
-function numberMaterial(n: number, fill: string, outline: string): THREE.MeshBasicMaterial {
-  const key = `${n}|${fill}|${outline}`;
-  let m = numberMatCache.get(key);
-  if (!m) {
-    m = new THREE.MeshBasicMaterial({ map: numberTexture(n, fill, outline), transparent: true, alphaTest: 0.3 });
-    numberMatCache.set(key, m);
-  }
-  return m;
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.45, '#b3b3b3');
+  grad.addColorStop(1, '#000000');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(cv);
 }
 
 function iconTexture(i: number): THREE.CanvasTexture {
@@ -134,164 +91,111 @@ function iconTexture(i: number): THREE.CanvasTexture {
   return t;
 }
 
-class TeamMats {
-  jersey: THREE.MeshLambertMaterial;
-  pants: THREE.MeshLambertMaterial;
-  helmet: THREE.MeshLambertMaterial;
-  stripe: THREE.MeshLambertMaterial;
-  socks: THREE.MeshLambertMaterial;
-  constructor(public colors: UniformColors) {
-    const m = (c: string) => new THREE.MeshLambertMaterial({ color: c, flatShading: true });
-    this.jersey = m(colors.jersey);
-    this.pants = m(colors.pants);
-    this.helmet = m(colors.helmet);
-    this.stripe = m(colors.stripe);
-    this.socks = m(colors.socks);
+let BODY_GEO: THREE.BufferGeometry | null = null;
+function bodyGeo(): THREE.BufferGeometry {
+  return (BODY_GEO ??= buildBodyGeometry());
+}
+const HELMET_MAT = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 80, specular: new THREE.Color('#8a8a8a') });
+
+const bodyMatCache = new Map<string, THREE.MeshLambertMaterial>();
+function bodyMaterial(u: UniformColors, number: number, skin: number): THREE.MeshLambertMaterial {
+  const key = `${u.jersey}|${u.pants}|${u.trim}|${number}|${skin}`;
+  let m = bodyMatCache.get(key);
+  if (!m) {
+    const tex = new THREE.CanvasTexture(paintUniform(u, number, SKIN_TONES[skin % SKIN_TONES.length]));
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 2;
+    m = new THREE.MeshLambertMaterial({ map: tex });
+    bodyMatCache.set(key, m);
   }
+  return m;
 }
 
 // ---------------------------------------------------------------------------
-// One player rig
+// One animated player
 // ---------------------------------------------------------------------------
 
 type Pose = {
-  hipsY: number; leanZ: number; leanX: number; bodyX: number;
+  hipsY: number; leanZ: number; leanX: number; bodyX: number; twist: number; headZ: number;
   legL: number; legR: number; kneeL: number; kneeR: number;
   armL: number; armR: number; armLx: number; armRx: number; elbL: number; elbR: number;
 };
 
-const ZERO_POSE: Pose = {
-  hipsY: 1.0, leanZ: 0, leanX: 0, bodyX: 0,
-  legL: 0, legR: 0, kneeL: 0, kneeR: 0,
-  armL: 0, armR: 0, armLx: -0.15, armRx: 0.15, elbL: 0.3, elbR: 0.3,
+/** Default: an athletic ready stance with bent knees. */
+const REST: Pose = {
+  hipsY: 0.97, leanZ: -0.08, leanX: 0, bodyX: 0, twist: 0, headZ: 0,
+  legL: 0.12, legR: 0.05, kneeL: -0.28, kneeR: -0.22,
+  armL: 0.1, armR: 0.1, armLx: -0.2, armRx: 0.2, elbL: 0.45, elbR: 0.45,
 };
 
 class Rig {
   root = new THREE.Group();
-  body = new THREE.Group();
-  hips = new THREE.Group();
-  torso = new THREE.Group();
-  legL = new THREE.Group();
-  legR = new THREE.Group();
-  kneeL = new THREE.Group();
-  kneeR = new THREE.Group();
-  armL = new THREE.Group();
-  armR = new THREE.Group();
-  elbL = new THREE.Group();
-  elbR = new THREE.Group();
-  head = new THREE.Group();
-  meshes: Record<string, THREE.Mesh[]> = { jersey: [], pants: [], helmet: [], stripe: [], socks: [], skin: [] };
-  numFront: THREE.Mesh;
-  numBack: THREE.Mesh;
-  shadow: THREE.Mesh;
-  pose: Pose = { ...ZERO_POSE };
+  bones: THREE.Bone[];
+  body: THREE.SkinnedMesh;
+  helmet: THREE.SkinnedMesh;
+  pose: Pose = { ...REST };
   phase = Math.random() * 6;
   facing = 0;
   downSide = 1;
   build = 1;
 
-  constructor() {
-    const add = (parent: THREE.Object3D, geo: THREE.BufferGeometry, slot: string | THREE.Material, x = 0, y = 0, z = 0) => {
-      const m = new THREE.Mesh(geo, typeof slot === 'string' ? MAT_SHARED.mask : slot);
-      m.position.set(x, y, z);
-      if (typeof slot === 'string') this.meshes[slot].push(m);
-      parent.add(m);
-      return m;
-    };
-    this.root.add(this.body);
-    this.body.add(this.hips);
-    this.hips.position.y = 1.0;
-    add(this.hips, GEO.pelvis, 'pants', 0, 0.02, 0);
-
-    for (const [leg, knee, z] of [[this.legL, this.kneeL, 0.11], [this.legR, this.kneeR, -0.11]] as const) {
-      leg.position.set(0, -0.05, z);
-      this.hips.add(leg);
-      add(leg, GEO.thigh, 'pants');
-      knee.position.y = -0.46;
-      leg.add(knee);
-      add(knee, GEO.shin, 'socks');
-      add(knee, GEO.foot, MAT_SHARED.shoe, 0.06, -0.44, 0);
-    }
-
-    this.torso.position.y = 0.06;
-    this.hips.add(this.torso);
-    add(this.torso, GEO.torso, 'jersey', 0, 0.3, 0);
-    add(this.torso, GEO.pads, 'jersey', 0, 0.58, 0);
-    this.numFront = add(this.torso, GEO.number, MAT_SHARED.mask, 0.172, 0.3, 0);
-    this.numFront.rotation.y = Math.PI / 2;
-    this.numBack = add(this.torso, GEO.number, MAT_SHARED.mask, -0.172, 0.33, 0);
-    this.numBack.rotation.y = -Math.PI / 2;
-
-    for (const [arm, elb, z] of [[this.armL, this.elbL, 0.33], [this.armR, this.elbR, -0.33]] as const) {
-      arm.position.set(0, 0.56, z);
-      this.torso.add(arm);
-      add(arm, GEO.upper, 'jersey');
-      elb.position.y = -0.32;
-      arm.add(elb);
-      add(elb, GEO.fore, 'skin');
-    }
-
-    this.head.position.y = 0.8;
-    this.torso.add(this.head);
-    add(this.head, GEO.helmet, 'helmet');
-    add(this.head, GEO.mask, MAT_SHARED.mask, 0.15, -0.04, 0);
-    add(this.head, GEO.stripe, 'stripe', 0, 0.165, 0);
-
-    this.shadow = new THREE.Mesh(GEO.shadow, MAT_SHARED.shadow);
-    this.shadow.rotation.x = -Math.PI / 2;
-    this.shadow.position.y = 0.02;
-    this.shadow.renderOrder = 2;
-    this.root.add(this.shadow);
+  constructor(helmetGeo: THREE.BufferGeometry) {
+    const { bones, skeleton } = makeSkeleton();
+    this.bones = bones;
+    this.body = new THREE.SkinnedMesh(bodyGeo(), new THREE.MeshLambertMaterial({ color: '#888888' }));
+    this.body.add(bones[0]);
+    this.body.bind(skeleton);
+    this.helmet = new THREE.SkinnedMesh(helmetGeo, HELMET_MAT);
+    this.helmet.bind(skeleton);
+    this.body.frustumCulled = false;
+    this.helmet.frustumCulled = false;
+    this.root.add(this.body, this.helmet);
   }
 
-  skin(mats: TeamMats, e: LineupEntry) {
-    for (const k of ['jersey', 'pants', 'helmet', 'stripe', 'socks'] as const) {
-      for (const m of this.meshes[k]) m.material = mats[k];
-    }
-    for (const m of this.meshes.skin) m.material = MAT_SHARED.skins[e.skin % SKIN.length];
-    const nm = numberMaterial(e.number, mats.colors.num, mats.colors.numOutline);
-    this.numFront.material = nm;
-    this.numBack.material = nm;
+  skin(u: UniformColors, helmetGeo: THREE.BufferGeometry, e: LineupEntry) {
+    this.body.material = bodyMaterial(u, e.number, e.skin);
+    this.helmet.geometry = helmetGeo;
     this.build = e.build;
-    const s = [0.88, 1.0, 1.2][e.build] ?? 1;
-    this.body.scale.set(s, 1, s);
+    const sx = [0.93, 1.0, 1.13][e.build] ?? 1;
+    const sz = [0.9, 1.0, 1.2][e.build] ?? 1;
+    this.bones[BONE.root].scale.set(sx, 1, sz);
     this.downSide = e.number % 2 ? 1 : -1;
   }
 
-  /** Compute the target pose for this frame and blend toward it. */
   animate(dt: number, anim: number, speed: number, carrier: boolean, time: number, lateral: number) {
     const a = Math.min(1, Math.max(0.15, speed / 8.5));
     this.phase += dt * (2.2 + speed * 1.55);
     const s = Math.sin(this.phase);
     const c = Math.cos(this.phase);
-    const t: Pose = { ...ZERO_POSE };
+    const t: Pose = { ...REST };
 
     const run = (amp: number) => {
       t.legL = s * 0.95 * amp;
       t.legR = -s * 0.95 * amp;
-      t.kneeL = -0.25 * amp - Math.max(0, -Math.sin(this.phase + 0.7)) * 1.3 * amp;
-      t.kneeR = -0.25 * amp - Math.max(0, Math.sin(this.phase + 0.7)) * 1.3 * amp;
+      t.kneeL = -0.3 * amp - Math.max(0, -Math.sin(this.phase + 0.7)) * 1.35 * amp;
+      t.kneeR = -0.3 * amp - Math.max(0, Math.sin(this.phase + 0.7)) * 1.35 * amp;
       t.armL = -s * 0.85 * amp;
       t.armR = s * 0.85 * amp;
-      t.elbL = 1.2;
-      t.elbR = 1.2;
-      t.leanZ = -0.1 - 0.22 * amp;
-      t.hipsY = 1.0 - 0.05 * amp + Math.abs(c) * 0.07 * amp;
+      t.elbL = 1.25;
+      t.elbR = 1.25;
+      t.leanZ = -0.12 - 0.24 * amp;
+      t.twist = s * 0.12 * amp;
+      t.hipsY = 0.99 - 0.06 * amp + Math.abs(c) * 0.07 * amp;
+      t.headZ = 0.12 * amp;
     };
 
     switch (anim) {
       case ANIM.Stance:
         if (this.build === 2) {
-          // Three-point stance.
-          Object.assign(t, { hipsY: 0.74, leanZ: -0.95, legL: 0.75, legR: 0.2, kneeL: -1.45, kneeR: -1.1, armR: 1.15, elbR: 0.1, armL: 0.5, elbL: 0.6 });
+          // Three-point stance: hand down, flat back, knees bent.
+          Object.assign(t, { hipsY: 0.72, leanZ: -1.05, legL: 0.85, legR: 0.3, kneeL: -1.55, kneeR: -1.2, armR: 1.2, elbR: 0.05, armL: 0.55, elbL: 0.7, headZ: 0.75 });
         } else {
-          Object.assign(t, { hipsY: 0.9, leanZ: -0.35, legL: 0.35, legR: 0.1, kneeL: -0.7, kneeR: -0.55, armL: 0.5, armR: 0.5, elbL: 0.6, elbR: 0.6 });
+          // Two-point athletic stance.
+          Object.assign(t, { hipsY: 0.86, leanZ: -0.42, legL: 0.42, legR: 0.12, kneeL: -0.85, kneeR: -0.65, armL: 0.55, armR: 0.55, elbL: 0.7, elbR: 0.7, headZ: 0.3 });
         }
         break;
       case ANIM.Idle:
-        t.hipsY = 0.99 + Math.sin(time * 2 + this.phase) * 0.008;
-        t.leanZ = -0.06;
-        t.elbL = t.elbR = 0.35;
+        t.hipsY = 0.96 + Math.sin(time * 2 + this.phase) * 0.008;
         break;
       case ANIM.Run:
       case ANIM.Juke:
@@ -304,17 +208,17 @@ class Rig {
       case ANIM.Block:
         run(0.35);
         this.phase += dt * 6;
-        Object.assign(t, { leanZ: -0.5, hipsY: 0.88, armL: 1.45, armR: 1.45, elbL: 0.35, elbR: 0.35, armLx: 0.1, armRx: -0.1 });
+        Object.assign(t, { leanZ: -0.55, hipsY: 0.86, armL: 1.45, armR: 1.45, elbL: 0.35, elbR: 0.35, armLx: 0.12, armRx: -0.12, headZ: 0.4 });
         break;
       case ANIM.Throw:
-        Object.assign(t, { armR: 2.9, elbR: 0.35, armL: 1.0, elbL: 0.8, leanZ: -0.05, legL: 0.35, legR: -0.25 });
+        Object.assign(t, { armR: 2.9, elbR: 0.35, armL: 1.0, elbL: 0.8, leanZ: -0.05, legL: 0.35, legR: -0.25, twist: -0.45 });
         break;
       case ANIM.Catch:
         run(a * 0.6);
-        Object.assign(t, { armL: 2.3, armR: 2.3, elbL: 0.5, elbR: 0.5, armLx: 0.25, armRx: -0.25 });
+        Object.assign(t, { armL: 2.3, armR: 2.3, elbL: 0.5, elbR: 0.5, armLx: 0.25, armRx: -0.25, headZ: -0.2 });
         break;
       case ANIM.Dive:
-        Object.assign(t, { leanZ: -1.4, hipsY: 0.6, armL: 3.0, armR: 3.0, elbL: 0.1, elbR: 0.1, legL: -0.35, legR: -0.5, kneeL: -0.2, kneeR: -0.2, bodyX: -0.4 });
+        Object.assign(t, { leanZ: -1.4, hipsY: 0.6, armL: 3.0, armR: 3.0, elbL: 0.1, elbR: 0.1, legL: -0.35, legR: -0.5, kneeL: -0.2, kneeR: -0.2, bodyX: -0.4, headZ: -0.3 });
         break;
       case ANIM.Down:
         Object.assign(t, {
@@ -328,13 +232,12 @@ class Rig {
         break;
       case ANIM.Celebrate: {
         const j = Math.abs(Math.sin(time * 7 + this.phase));
-        Object.assign(t, { hipsY: 1.0 + j * 0.25, armL: 3.0, armR: 3.0, armLx: -0.35, armRx: 0.35, elbL: 0.2, elbR: 0.2, legL: j * 0.3, legR: -j * 0.2, kneeL: -j * 0.6, kneeR: -j * 0.5 });
+        Object.assign(t, { hipsY: 1.0 + j * 0.25, armL: 3.0, armR: 3.0, armLx: -0.35, armRx: 0.35, elbL: 0.2, elbR: 0.2, legL: j * 0.3, legR: -j * 0.2, kneeL: -j * 0.6, kneeR: -j * 0.5, headZ: -0.3 });
         break;
       }
     }
 
     if (carrier && anim !== ANIM.Down && anim !== ANIM.Throw && anim !== ANIM.Stiff && anim !== ANIM.Celebrate) {
-      // Tuck the ball.
       t.armR = 0.7;
       t.elbR = 2.0;
       t.armRx = -0.2;
@@ -342,30 +245,27 @@ class Rig {
 
     const k = 1 - Math.exp(-dt * (anim === ANIM.Down || anim === ANIM.Dive ? 9 : 16));
     const p = this.pose;
-    for (const key of Object.keys(p) as (keyof Pose)[]) {
-      p[key] += (t[key] - p[key]) * k;
-    }
+    for (const key of Object.keys(p) as (keyof Pose)[]) p[key] += (t[key] - p[key]) * k;
 
-    this.hips.position.y = p.hipsY;
-    this.body.rotation.z = p.leanZ;
-    this.body.rotation.x = p.leanX;
-    this.body.position.x = p.bodyX;
-    this.body.position.y = anim === ANIM.Down ? 0.15 : 0;
-    this.legL.rotation.z = p.legL;
-    this.legR.rotation.z = p.legR;
-    this.kneeL.rotation.z = p.kneeL;
-    this.kneeR.rotation.z = p.kneeR;
-    this.armL.rotation.z = p.armL;
-    this.armR.rotation.z = p.armR;
-    this.armL.rotation.x = p.armLx;
-    this.armR.rotation.x = p.armRx;
-    this.elbL.rotation.z = p.elbL;
-    this.elbR.rotation.z = p.elbR;
+    const B = this.bones;
+    B[BONE.root].rotation.set(p.leanX, 0, p.leanZ);
+    B[BONE.root].position.set(p.bodyX, anim === ANIM.Down ? 0.15 : 0, 0);
+    B[BONE.hips].position.y = HIPS_REST_Y + (p.hipsY - 1.0);
+    B[BONE.spine].rotation.set(0, p.twist, 0);
+    B[BONE.head].rotation.set(0, 0, p.headZ);
+    B[BONE.thL].rotation.z = p.legL;
+    B[BONE.thR].rotation.z = p.legR;
+    B[BONE.knL].rotation.z = p.kneeL;
+    B[BONE.knR].rotation.z = p.kneeR;
+    B[BONE.shL].rotation.set(p.armLx, 0, p.armL);
+    B[BONE.shR].rotation.set(p.armRx, 0, p.armR);
+    B[BONE.elL].rotation.z = p.elbL;
+    B[BONE.elR].rotation.z = p.elbR;
   }
 }
 
 // ---------------------------------------------------------------------------
-// All 22 players + ball + markers
+// Everything player-related in the scene
 // ---------------------------------------------------------------------------
 
 function lerpAngle(a: number, b: number, t: number): number {
@@ -376,6 +276,12 @@ function lerpAngle(a: number, b: number, t: number): number {
   return a + d * t;
 }
 
+interface Squad {
+  bodies: THREE.InstancedMesh;
+  helmets: THREE.InstancedMesh;
+  spots: { x: number; z: number; rot: number; phase: number }[];
+}
+
 export class Players {
   readonly group = new THREE.Group();
   private rigs: Rig[] = [];
@@ -384,24 +290,49 @@ export class Players {
   private ring: THREE.Mesh;
   private ball: THREE.Group;
   private ballShadow: THREE.Mesh;
-  private mats: [TeamMats, TeamMats];
+  private ao: THREE.InstancedMesh;
+  private cast: THREE.InstancedMesh;
+  private uniforms: [UniformColors, UniformColors];
+  private helmets: [THREE.BufferGeometry, THREE.BufferGeometry];
+  private squads: Squad[] = [];
+  private dummy = new THREE.Object3D();
   private ballSpin = 0;
-  /** Facing angle (core space) of each rig, for the camera and input. */
-  facings: number[] = new Array(N).fill(0);
-  positions: THREE.Vector3[] = Array.from({ length: N }, () => new THREE.Vector3());
   userIndex = -1;
   ballPos = new THREE.Vector3();
+  /** 0–1: makes the sideline squads bounce after big plays. */
+  excitement = 0;
 
   constructor(scene: THREE.Scene, home: TeamInfo, away: TeamInfo) {
-    this.mats = [new TeamMats(uniformFor(home, true)), new TeamMats(uniformFor(away, false))];
+    this.uniforms = [uniformFor(home, true), uniformFor(away, false)];
+    this.helmets = [
+      buildHelmetGeometry(this.uniforms[0].helmet, this.uniforms[0].stripe, this.uniforms[0].mask),
+      buildHelmetGeometry(this.uniforms[1].helmet, this.uniforms[1].stripe, this.uniforms[1].mask),
+    ];
     for (let i = 0; i < N; i++) {
-      const r = new Rig();
+      const r = new Rig(this.helmets[0]);
       this.rigs.push(r);
       this.group.add(r.root);
     }
-    for (let i = 1; i <= 5; i++) {
-      this.iconMats.push(new THREE.SpriteMaterial({ map: iconTexture(i), depthTest: false }));
+
+    // Grounded shadows: a soft AO blob under each player plus a stretched floodlight shadow.
+    const soft = softTexture();
+    this.ao = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1.25, 1.25).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: '#000000', alphaMap: soft, transparent: true, opacity: 0.6, depthWrite: false }),
+      N,
+    );
+    this.cast = new THREE.InstancedMesh(
+      new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: '#000000', alphaMap: soft, transparent: true, opacity: 0.42, depthWrite: false }),
+      N,
+    );
+    for (const m of [this.ao, this.cast]) {
+      m.renderOrder = 2;
+      m.frustumCulled = false;
+      this.group.add(m);
     }
+
+    for (let i = 1; i <= 5; i++) this.iconMats.push(new THREE.SpriteMaterial({ map: iconTexture(i), depthTest: false }));
     for (let i = 0; i < N; i++) {
       const s = new THREE.Sprite(this.iconMats[0]);
       s.scale.set(0.95, 0.95, 1);
@@ -410,34 +341,73 @@ export class Players {
       this.icons.push(s);
       this.group.add(s);
     }
-    const ringGeo = new THREE.RingGeometry(0.55, 0.78, 20);
-    this.ring = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: '#ffe14a', transparent: true, opacity: 0.9, depthWrite: false }));
+    this.ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.55, 0.78, 24),
+      new THREE.MeshBasicMaterial({ color: '#ffe14a', transparent: true, opacity: 0.9, depthWrite: false }),
+    );
     this.ring.rotation.x = -Math.PI / 2;
     this.ring.renderOrder = 3;
     this.group.add(this.ring);
 
-    // Ball: a prolate spheroid with a lace stripe.
+    // Ball: glossy leather spheroid with laces.
     this.ball = new THREE.Group();
-    const leather = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), new THREE.MeshLambertMaterial({ color: '#7a3d1a', flatShading: true }));
+    const leather = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 12, 8),
+      new THREE.MeshPhongMaterial({ color: '#7a3b18', shininess: 40, specular: new THREE.Color('#5a4030') }),
+    );
     leather.scale.set(1.65, 1, 1);
     const laces = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.012, 0.025), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
     laces.position.y = 0.11;
     this.ball.add(leather, laces);
     this.group.add(this.ball);
-    this.ballShadow = new THREE.Mesh(new THREE.CircleGeometry(0.16, 8), MAT_SHARED.shadow);
-    this.ballShadow.rotation.x = -Math.PI / 2;
+    this.ballShadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.45, 0.45).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: '#000000', alphaMap: soft, transparent: true, opacity: 0.5, depthWrite: false }),
+    );
     this.ballShadow.position.y = 0.02;
     this.group.add(this.ballShadow);
 
+    this.buildSidelines();
     scene.add(this.group);
   }
 
+  /** Each team's reserves standing on its own sideline in warm-up jackets. */
+  private buildSidelines() {
+    let seed = 4242;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+    for (const team of [0, 1]) {
+      const u = this.uniforms[team];
+      const jacket: UniformColors = { ...u, jersey: team === 0 ? u.jersey : u.trim, trim: team === 0 ? u.trim : '#f1f0ea' };
+      const count = 16;
+      const tex = new THREE.CanvasTexture(paintUniform(jacket, -1, SKIN_TONES[2]));
+      tex.colorSpace = THREE.SRGBColorSpace;
+      const bodies = new THREE.InstancedMesh(bodyGeo(), new THREE.MeshLambertMaterial({ map: tex }), count);
+      const helmets = new THREE.InstancedMesh(this.helmets[team], HELMET_MAT, count);
+      const spots: Squad['spots'] = [];
+      for (let i = 0; i < count; i++) {
+        const x = 38 + (i / (count - 1)) * 44 + (rnd() - 0.5) * 1.6;
+        const coreY = team === 0 ? -5.2 - rnd() * 2.2 : FIELD_W + 5.2 + rnd() * 2.2;
+        const facing = team === 0 ? Math.PI / 2 : -Math.PI / 2;
+        spots.push({ x, z: -coreY, rot: facing + (rnd() - 0.5) * 0.9, phase: rnd() * 6 });
+      }
+      for (const m of [bodies, helmets]) {
+        m.frustumCulled = false;
+        this.group.add(m);
+      }
+      this.squads.push({ bodies, helmets, spots });
+    }
+  }
+
   setLineup(lineup: LineupEntry[]) {
-    lineup.forEach((e, i) => this.rigs[i]?.skin(this.mats[e.team] ?? this.mats[0], e));
+    lineup.forEach((e, i) => {
+      const t = e.team === 1 ? 1 : 0;
+      this.rigs[i]?.skin(this.uniforms[t], this.helmets[t], e);
+    });
   }
 
   update(prev: Float32Array, cur: Float32Array, alpha: number, dt: number, time: number) {
     this.userIndex = -1;
+    const d = this.dummy;
     for (let i = 0; i < N; i++) {
       const o = i * STRIDE;
       const x = prev[o] + (cur[o] - prev[o]) * alpha;
@@ -450,22 +420,33 @@ export class Players {
       const icon = cur[o + 7];
       const rig = this.rigs[i];
       rig.root.position.set(x, z, -y);
-      // Smooth facing a little more on top of the sim's turn rate.
       rig.facing = lerpAngle(rig.facing, facing, 1 - Math.exp(-dt * 20));
       rig.root.rotation.y = rig.facing;
-      this.facings[i] = rig.facing;
-      this.positions[i].set(x, z, -y);
-      // Lateral velocity sign (for juke lean).
       const vx = cur[o] - prev[o];
       const vy = cur[o + 1] - prev[o + 1];
       const lateral = -Math.sin(facing) * vx + Math.cos(facing) * vy;
       rig.animate(dt, anim, speed, (flags & FLAG.Carrier) !== 0, time, lateral);
 
+      // AO blob centered on the body (longer when lying down).
+      const down = anim === ANIM.Down || anim === ANIM.Dive;
+      d.position.set(x, 0.021, -y);
+      d.rotation.set(0, rig.facing, 0);
+      d.scale.set(down ? 2.0 : 1, 1, down ? 0.9 : 1);
+      d.updateMatrix();
+      this.ao.setMatrixAt(i, d.matrix);
+      // Floodlight shadow stretched away from the key light.
+      const len = down ? 1.6 : 2.3;
+      d.position.set(x + SHADOW_DIR.x * len * 0.42, 0.02, -y + SHADOW_DIR.y * len * 0.42);
+      d.rotation.set(0, -Math.atan2(SHADOW_DIR.y, SHADOW_DIR.x), 0);
+      d.scale.set(len, 1, 0.8);
+      d.updateMatrix();
+      this.cast.setMatrixAt(i, d.matrix);
+
       const ic = this.icons[i];
       if (icon > 0) {
         ic.visible = true;
         ic.material = this.iconMats[icon - 1];
-        ic.position.set(x, 2.75, -y);
+        ic.position.set(x, 2.85, -y);
       } else {
         ic.visible = false;
       }
@@ -476,7 +457,24 @@ export class Players {
         this.ring.scale.set(pulse, pulse, pulse);
       }
     }
+    this.ao.instanceMatrix.needsUpdate = true;
+    this.cast.instanceMatrix.needsUpdate = true;
     this.ring.visible = this.userIndex >= 0;
+
+    // Sideline squads sway, and bounce when the crowd is excited.
+    for (const sq of this.squads) {
+      sq.spots.forEach((s, i) => {
+        const bounce = this.excitement > 0.25 ? Math.abs(Math.sin(time * 6 + s.phase)) * 0.12 * this.excitement : 0;
+        d.position.set(s.x, bounce, s.z);
+        d.rotation.set(0, s.rot + Math.sin(time * 0.6 + s.phase) * 0.15, 0);
+        d.scale.set(1, 1, 1);
+        d.updateMatrix();
+        sq.bodies.setMatrixAt(i, d.matrix);
+        sq.helmets.setMatrixAt(i, d.matrix);
+      });
+      sq.bodies.instanceMatrix.needsUpdate = true;
+      sq.helmets.instanceMatrix.needsUpdate = true;
+    }
 
     // Ball.
     const b = N * STRIDE;
@@ -488,7 +486,6 @@ export class Players {
     this.ball.position.set(bx, Math.max(0.1, bz), -by);
     this.ballPos.copy(this.ball.position);
     if (state === 2) {
-      // In the air: point along the flight path and spiral.
       const vx = cur[b + 5];
       const vy = cur[b + 6];
       this.ball.rotation.set(0, Math.atan2(vy, vx), 0);
@@ -503,7 +500,7 @@ export class Players {
     this.ballShadow.visible = bz > 0.4;
   }
 
-  /** Index of the receiver icon nearest a ground point (core coordinates), or 0. */
+  /** Receiver icon (1–5) nearest a ground point in core coordinates, or 0. */
   iconNear(cur: Float32Array, px: number, py: number, maxDist = 4.5): number {
     let best = 0;
     let bestD = maxDist;
@@ -511,9 +508,9 @@ export class Players {
       const o = i * STRIDE;
       const icon = cur[o + 7];
       if (icon <= 0) continue;
-      const d = Math.hypot(cur[o] - px, cur[o + 1] - py);
-      if (d < bestD) {
-        bestD = d;
+      const dd = Math.hypot(cur[o] - px, cur[o + 1] - py);
+      if (dd < bestD) {
+        bestD = dd;
         best = icon;
       }
     }

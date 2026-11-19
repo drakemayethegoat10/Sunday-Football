@@ -71,6 +71,11 @@ export class Sfx {
     this.crowdGain.gain.setTargetAtTime(0.05 + this.excitement * 0.22, this.ctx.currentTime, 0.15);
   }
 
+  /** Current crowd excitement, 0 (calm) to ~1 (going wild). */
+  get level(): number {
+    return this.excitement;
+  }
+
   roar(amount: number) {
     this.excitement = Math.min(1.2, this.excitement + amount);
   }

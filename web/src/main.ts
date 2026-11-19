@@ -1,11 +1,18 @@
 // Sunday Football web client: boots the WebAssembly core, renders with Three.js,
 // and wires input, UI and audio together.
 
+import '@fontsource/barlow-condensed/600.css';
+import '@fontsource/barlow-condensed/700.css';
+import '@fontsource/barlow-condensed/700-italic.css';
+import '@fontsource/barlow-condensed/800.css';
+import '@fontsource/barlow-condensed/800-italic.css';
 import './style.css';
 import * as THREE from 'three';
 import init, { WebGame } from './wasm/sf_wasm.js';
 import teamsData from '../../data/teams.json';
-import { Stadium } from './render/stadium';
+import { Stadium, UI_FONT } from './render/stadium';
+import { Ps2Pipeline } from './render/pipeline';
+import { setNumberFont } from './render/athlete';
 import { Players } from './render/players';
 import { CameraRig } from './render/camera';
 import { Input } from './input';
@@ -40,6 +47,7 @@ interface Session {
 }
 
 let renderer: THREE.WebGLRenderer | null = null;
+let pipeline: Ps2Pipeline | null = null;
 let session: Session | null = null;
 let acc = 0;
 let last = performance.now();
@@ -51,6 +59,13 @@ let fpsTime = 0;
 // ---------------------------------------------------------------------------
 // Setup
 // ---------------------------------------------------------------------------
+
+function applyQuality() {
+  if (!renderer || !pipeline) return;
+  renderer.setPixelRatio(quality.pixelRatio());
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  pipeline.setInternalSize(quality.internalSize);
+}
 
 function makeRenderer(): THREE.WebGLRenderer | null {
   try {
@@ -74,7 +89,7 @@ function disposeScene(scene: THREE.Scene) {
 function newSession(home: TeamInfo, away: TeamInfo, quarterMinutes: number, attract: boolean): Session {
   if (session) disposeScene(session.scene);
   const scene = new THREE.Scene();
-  const stadium = new Stadium(scene, home, away, renderer!.capabilities.getMaxAnisotropy());
+  const stadium = new Stadium(scene, home, away, TEAMS, renderer!.capabilities.getMaxAnisotropy());
   const players = new Players(scene, home, away);
   const cam = new CameraRig(window.innerWidth / window.innerHeight);
   if (attract) cam.preset = 1;
@@ -120,7 +135,7 @@ function startAttract() {
 function startGame(c: TitleChoice) {
   sfx.start();
   quality.setMode(c.quality as QualityMode);
-  renderer?.setPixelRatio(quality.pixelRatio());
+  applyQuality();
   session = newSession(TEAMS[c.home], TEAMS[c.away], c.quarterMinutes, false);
   ui.showTitle(false);
   ui.showFinal(session.hud, null);
@@ -164,7 +179,7 @@ function togglePause() {
         break;
       case 'quality':
         quality.cycle();
-        renderer?.setPixelRatio(quality.pixelRatio());
+        applyQuality();
         break;
       case 'mute':
         sfx.toggleMute();
@@ -345,7 +360,10 @@ function frame(now: number, draw = true) {
   handleEvents(s, JSON.parse(s.game.events()) as GameEvent[]);
 
   s.players.update(s.prev, s.cur, alpha, dt, time);
-  s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, s.hud.to_go !== 'Goal');
+  s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, s.hud.to_go !== 'Goal', s.hud.down, s.hud.dir);
+  s.stadium.setScoreboard(s.hud);
+  s.players.excitement = sfx.level;
+  s.stadium.update(time, s.attract ? 0.1 : sfx.level);
 
   // Camera focus: the line of scrimmage before the snap, the ball once it's live.
   const h = s.hud;
@@ -388,7 +406,7 @@ function frame(now: number, draw = true) {
       }
     }
 
-    if (quality.sample(dt)) renderer.setPixelRatio(quality.pixelRatio());
+    if (quality.sample(dt)) applyQuality();
     sfx.update(dt);
   }
 
@@ -400,13 +418,11 @@ function frame(now: number, draw = true) {
     fpsTime = 0;
   }
 
-  if (draw) renderer.render(s.scene, s.cam.camera);
+  if (draw) pipeline!.render(s.scene, s.cam.camera);
 }
 
 window.addEventListener('resize', () => {
-  if (!renderer) return;
-  renderer.setPixelRatio(quality.pixelRatio());
-  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  applyQuality();
   session?.cam.setAspect(window.innerWidth / window.innerHeight);
 });
 
@@ -424,8 +440,16 @@ async function boot() {
     ui.setLoadStatus('This device could not start 3D graphics (WebGL). Try another browser or turn on hardware acceleration.');
     return;
   }
+  pipeline = new Ps2Pipeline(renderer);
+  applyQuality();
   try {
     await init();
+    // Canvas textures (numbers, scoreboards) need the bundled font loaded first.
+    await Promise.race([
+      Promise.all(['700 32px', 'italic 700 32px', '800 32px', 'italic 800 32px'].map((f) => document.fonts.load(`${f} "Barlow Condensed"`))),
+      new Promise((r) => setTimeout(r, 2500)),
+    ]).catch(() => undefined);
+    setNumberFont(UI_FONT);
   } catch (err) {
     console.error(err);
     ui.setLoadStatus('The game engine failed to load. Try refreshing the page.');

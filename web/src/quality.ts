@@ -1,40 +1,49 @@
-// Graphics quality. The retro look comes partly from rendering at a low internal
-// resolution and scaling up, which is also what keeps weak Chromebooks at 60 fps.
+// Graphics quality. The 3D scene renders at a fixed internal resolution (640x448 is the
+// PS2 look) and is upscaled with bilinear filtering. Lower levels exist for weak
+// Chromebooks; higher ones for the PC.
 
-export type QualityLevel = 'low' | 'medium' | 'high' | 'ultra';
+export type QualityLevel = 'low' | 'ps2' | 'high' | 'ultra';
 export type QualityMode = QualityLevel | 'auto';
 
-const LEVELS: QualityLevel[] = ['low', 'medium', 'high', 'ultra'];
-/** Internal render height in pixels (null = native resolution). */
-const HEIGHT: Record<QualityLevel, number | null> = { low: 360, medium: 540, high: 720, ultra: null };
+const LEVELS: QualityLevel[] = ['low', 'ps2', 'high', 'ultra'];
+/** Internal render size (null = native resolution). */
+const SIZE: Record<QualityLevel, [number, number] | null> = {
+  low: [512, 358],
+  ps2: [640, 448],
+  high: [960, 672],
+  ultra: null,
+};
+const LABEL: Record<QualityLevel, string> = {
+  low: 'Low 512×358',
+  ps2: 'PS2 640×448',
+  high: 'High 960×672',
+  ultra: 'Ultra (native)',
+};
 
 export class Quality {
   mode: QualityMode = 'auto';
-  level: QualityLevel = 'medium';
+  level: QualityLevel = 'ps2';
   private frames = 0;
   private time = 0;
   private settled = false;
-  /** Highest level auto mode may try (lowered after a downgrade so it never oscillates). */
-  private maxIdx = 2;
 
   constructor() {
     try {
-      const m = localStorage.getItem('sf.quality') as QualityMode | null;
-      if (m && (m === 'auto' || LEVELS.includes(m as QualityLevel))) this.setMode(m);
+      const m = localStorage.getItem('sf.quality');
+      if (m === 'auto' || LEVELS.includes(m as QualityLevel)) this.setMode(m as QualityMode);
     } catch {
-      /* ignore */
+      /* storage unavailable */
     }
   }
 
   setMode(m: QualityMode) {
-    this.mode = m;
-    this.level = m === 'auto' ? 'medium' : m;
+    this.mode = LEVELS.includes(m as QualityLevel) || m === 'auto' ? m : 'auto';
+    this.level = this.mode === 'auto' ? 'ps2' : (this.mode as QualityLevel);
     this.frames = 0;
     this.time = 0;
     this.settled = false;
-    this.maxIdx = 2;
     try {
-      localStorage.setItem('sf.quality', m);
+      localStorage.setItem('sf.quality', this.mode);
     } catch {
       /* ignore */
     }
@@ -47,16 +56,19 @@ export class Quality {
   }
 
   get label(): string {
-    return this.mode === 'auto' ? `Auto (${this.level})` : this.level;
+    return this.mode === 'auto' ? `Auto (${LABEL[this.level]})` : LABEL[this.level];
   }
 
+  get internalSize(): [number, number] | null {
+    return SIZE[this.level];
+  }
+
+  /** Canvas pixel ratio for the final upscale pass (cheap: one textured quad). */
   pixelRatio(): number {
-    const h = HEIGHT[this.level];
-    const dpr = window.devicePixelRatio || 1;
-    return h ? Math.min(dpr, h / Math.max(1, window.innerHeight)) : dpr;
+    return Math.min(window.devicePixelRatio || 1, 2);
   }
 
-  /** Feed frame times while playing. Returns true if the level changed (re-apply pixel ratio). */
+  /** Feed frame times while playing. Returns true if the level changed. */
   sample(dt: number): boolean {
     if (this.mode !== 'auto' || this.settled) return false;
     this.frames++;
@@ -65,18 +77,12 @@ export class Quality {
     const fps = this.frames / this.time;
     this.frames = 0;
     this.time = 0;
-    const i = LEVELS.indexOf(this.level);
-    if (fps < 45 && i > 0) {
-      this.level = LEVELS[i - 1];
-      this.maxIdx = i - 1;
+    if (fps < 45 && this.level !== 'low') {
+      this.level = 'low';
+      this.settled = true;
       return true;
     }
-    if (fps > 57 && i < this.maxIdx) {
-      // Plenty of headroom: try one level up, and stop probing if that's too much.
-      this.level = LEVELS[i + 1];
-      return true;
-    }
-    this.settled = fps >= 45 || i === 0;
+    this.settled = true;
     return false;
   }
 }

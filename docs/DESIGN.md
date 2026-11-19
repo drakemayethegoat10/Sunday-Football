@@ -139,12 +139,32 @@ commentary**. Voice will be hooked up to a local voice-AI engine (PC first). The
 emits structured play-by-play events, so either output can use them.
 
 ## 8. Art direction
-* **Web: PS2-era retro.** Chunky low-poly players, low-res textures, blob shadows,
-  soft upscaled low internal resolution. Targets 60 fps on weak integrated GPUs.
+* **Web: PS2-era.** Specified by the owner:
+  1. **Render pipeline:** the 3D scene renders at an internal **640×448** and is upscaled
+     with bilinear filtering. Pixels are anamorphic on widescreen, like PS2 widescreen.
+     Subtle distance fog, plus a soft bloom pass on bright highlights.
+  2. **Turf & lighting:** worn, textured grass with dirt wear between the hashes and in
+     the goal mouths, scuffed paint, and directional stadium floodlighting (warm key,
+     cool fill, rim). Helmets are glossy (Phong). Players get soft AO blobs plus floodlight
+     cast shadows.
+  3. **Atmosphere:** sky dome gradient with clouds, two-tier stands with a colorful crowd
+     that bounces on big plays, glowing ribbon billboards (league/team names only, no real
+     brands), a jumbotron with the live score, lattice light towers, team benches,
+     coolers, a chain gang with a down box, and sideline squads in warm-up jackets.
+  4. **Players:** athletic low-poly proportions: V-shaped torso, shoulder pads with caps,
+     helmets with facemask cage and stripe, bent-knee stances. Each player has a painted
+     uniform texture (shaded jersey fabric, numbers, stripes). One skinned body plus one
+     helmet per player, so just 2 draw calls.
+  5. **HUD:** an early-2000s TV broadcast package: top scorebug, lower-third
+     play-by-play, swoosh banners, and a play-call menu with bold condensed italics
+     (Barlow Condensed, bundled and OFL-licensed), beveled glossy gradient panels, and
+     drop shadows.
+* Quality levels: Low 512×358 · **PS2 640×448 (default)** · High 960×672 · Ultra (native).
+  Auto mode starts at PS2 and drops to Low only if a Chromebook can't hold 45 fps.
 * **PC: the same art, made sharper (default).** Native resolution, real shadows, better
   lighting, more crowd detail, higher-detail options added over time.
 * All art, audio and animation is original. It is made procedurally, in Blender, or
-  comes from properly licensed (CC0/CC-BY) sources.
+  comes from properly licensed (CC0/CC-BY/OFL) sources.
 
 ## 9. Multiplayer
 * Vs CPU and **local 2-player** (same device: shared keyboard or controllers).
