@@ -104,7 +104,7 @@ function bodyMaterial(u: UniformColors, number: number, skin: number): THREE.Mes
   if (!m) {
     const tex = new THREE.CanvasTexture(paintUniform(u, number, SKIN_TONES[skin % SKIN_TONES.length]));
     tex.colorSpace = THREE.SRGBColorSpace;
-    tex.anisotropy = 2;
+    tex.anisotropy = 4;
     m = new THREE.MeshLambertMaterial({ map: tex });
     bodyMatCache.set(key, m);
   }

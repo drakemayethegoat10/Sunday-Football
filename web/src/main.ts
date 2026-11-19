@@ -471,6 +471,16 @@ void boot();
 if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__sf = {
     hud: () => session?.hud,
+    /** Show a painted uniform atlas full-size on the page (for checking textures). */
+    async atlas(teamIdx = 0, number = 27, home = true) {
+      const { paintUniform, SKIN_TONES } = await import('./render/athlete');
+      const { uniformFor } = await import('./render/players');
+      const cv = paintUniform(uniformFor(TEAMS[teamIdx], home), number, SKIN_TONES[2]);
+      cv.style.cssText = 'position:fixed;left:10px;top:60px;width:512px;height:512px;z-index:99;image-rendering:pixelated;border:2px solid #fff';
+      cv.id = 'atlas-debug';
+      document.getElementById('atlas-debug')?.remove();
+      document.body.appendChild(cv);
+    },
     tick(seconds: number) {
       const frames = Math.round(seconds * 60);
       for (let i = 0; i < frames; i++) frame(last + 1000 / 60, false);
