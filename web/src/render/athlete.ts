@@ -46,22 +46,25 @@ export function makeSkeleton(): { bones: THREE.Bone[]; skeleton: THREE.Skeleton 
 }
 
 // ---------------------------------------------------------------------------
-// Uniform texture atlas (128x128 per player)
+// Uniform texture atlas: regions are in a 128x128 layout, painted at 2x (256x256)
 // ---------------------------------------------------------------------------
 
 type Region = [number, number, number, number];
 export const ATLAS = {
-  jersey: [0, 0, 128, 56] as Region,
-  pads: [0, 56, 64, 16] as Region,
-  sleeve: [64, 56, 64, 16] as Region,
-  pants: [0, 72, 64, 24] as Region,
-  sock: [64, 72, 32, 24] as Region,
-  skin: [96, 72, 32, 24] as Region,
+  jersey: [0, 0, 128, 56] as Region, // torso wrap: top = collar, bottom = waist
+  pads: [0, 56, 64, 16] as Region, // shoulder pads, caps, chest/back plates
+  sleeve: [64, 56, 64, 16] as Region, // upper arm: sleeve on top, bicep below
+  pants: [0, 72, 64, 24] as Region, // hips and thighs: top = belt, bottom = knee
+  sock: [64, 72, 32, 24] as Region, // shin: pants cuff, sock, ankle tape
+  skin: [96, 72, 32, 24] as Region, // forearm: elbow to taped wrist
   shoe: [0, 96, 32, 16] as Region,
   glove: [32, 96, 32, 16] as Region,
   belt: [64, 96, 32, 16] as Region,
   knee: [96, 96, 32, 16] as Region,
+  neck: [0, 112, 32, 16] as Region,
+  collar: [32, 112, 32, 16] as Region,
 };
+const S = 2; // paint scale
 
 export interface UniformColors {
   jersey: string;
@@ -85,6 +88,11 @@ function shadeHex(hex: string, f: number): string {
   return '#' + c.getHexString();
 }
 
+function luma(hex: string): number {
+  const c = new THREE.Color(hex);
+  return 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+}
+
 export const SKIN_TONES = ['#f1c9a5', '#e0ac7e', '#c58c62', '#a8714a', '#8d5a3b', '#5a3a26'];
 
 let fontFamily = 'Arial Black, Impact, sans-serif';
@@ -94,104 +102,249 @@ export function setNumberFont(f: string) {
 }
 
 /**
- * Paint a uniform atlas. `number` < 0 paints a plain warm-up jacket (sideline players).
+ * Paint a uniform atlas with baked folds, trim and shading.
+ * `number` < 0 paints a plain warm-up jacket (sideline players, crew).
  */
 export function paintUniform(u: UniformColors, number: number, skin: string): HTMLCanvasElement {
   const cv = document.createElement('canvas');
-  cv.width = cv.height = 128;
+  cv.width = cv.height = 128 * S;
   const g = cv.getContext('2d')!;
-  let seed = number * 7919 + 17;
+  g.scale(S, S);
+  let seed = (number + 3) * 7919 + u.jersey.length * 31 + skin.charCodeAt(1);
   const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  const lightCloth = luma(u.jersey) > 0.6;
+
   const fill = (r: Region, c: string) => {
     g.fillStyle = c;
     g.fillRect(r[0], r[1], r[2], r[3]);
   };
+  /** Base color with darkening toward the sides of the wrapped cylinder (u = 0 and 0.5). */
+  const wrapShade = (r: Region, c: string, amp: number) => {
+    for (let x = 0; x < r[2]; x += 0.5) {
+      const side = Math.abs(Math.cos((x / r[2]) * Math.PI * 2));
+      g.fillStyle = shadeHex(c, 1.0 - side * amp);
+      g.fillRect(r[0] + x, r[1], 0.6, r[3]);
+    }
+  };
+  const vgrad = (r: Region, stops: [number, string][]) => {
+    const gr = g.createLinearGradient(0, r[1], 0, r[1] + r[3]);
+    for (const [o, c] of stops) gr.addColorStop(o, c);
+    g.fillStyle = gr;
+    g.fillRect(r[0], r[1], r[2], r[3]);
+  };
   const noise = (r: Region, amt: number) => {
-    const img = g.getImageData(r[0], r[1], r[2], r[3]);
+    const img = g.getImageData(r[0] * S, r[1] * S, r[2] * S, r[3] * S);
     for (let i = 0; i < img.data.length; i += 4) {
       const n = (rnd() - 0.5) * amt;
       img.data[i] += n;
       img.data[i + 1] += n;
       img.data[i + 2] += n;
     }
-    g.putImageData(img, r[0], r[1]);
+    g.putImageData(img, r[0] * S, r[1] * S);
+  };
+  /** A soft fabric fold: a dark crease with a light ridge beside it. */
+  const fold = (x0: number, y0: number, cx: number, cy: number, x1: number, y1: number, w = 1.1, strength = 1) => {
+    g.save();
+    g.filter = 'blur(0.7px)';
+    g.lineCap = 'round';
+    g.lineWidth = w;
+    g.strokeStyle = `rgba(0,0,0,${(lightCloth ? 0.16 : 0.42) * strength})`;
+    g.beginPath();
+    g.moveTo(x0, y0);
+    g.quadraticCurveTo(cx, cy, x1, y1);
+    g.stroke();
+    g.strokeStyle = `rgba(255,255,255,${(lightCloth ? 0.35 : 0.17) * strength})`;
+    g.lineWidth = w * 0.8;
+    g.beginPath();
+    g.moveTo(x0 + 0.9, y0 + 0.3);
+    g.quadraticCurveTo(cx + 0.9, cy + 0.3, x1 + 0.9, y1 + 0.3);
+    g.stroke();
+    g.restore();
+  };
+  const stain = (x: number, y: number, rad: number, a: number) => {
+    g.save();
+    g.filter = 'blur(1.2px)';
+    g.fillStyle = rnd() < 0.5 ? `rgba(90,70,40,${a})` : `rgba(60,95,40,${a})`;
+    g.beginPath();
+    g.ellipse(x, y, rad * (0.6 + rnd()), rad * (0.4 + rnd() * 0.5), rnd() * 3, 0, Math.PI * 2);
+    g.fill();
+    g.restore();
   };
 
-  // Jersey: fabric shading wraps around the torso (u = around, sides are at u=0 and 0.5).
-  const [jx, jy, jw, jh] = ATLAS.jersey;
-  for (let x = 0; x < jw; x++) {
-    const side = Math.abs(Math.cos((x / jw) * Math.PI * 2)); // 1 at the sides
-    const f = 1.0 - side * 0.22;
-    g.fillStyle = shadeHex(u.jersey, f);
-    g.fillRect(jx + x, jy, 1, jh);
-  }
-  // Darker toward the waist, plus mesh texture and a collar.
-  const grad = g.createLinearGradient(0, jy, 0, jy + jh);
-  grad.addColorStop(0, 'rgba(255,255,255,0.10)');
-  grad.addColorStop(0.55, 'rgba(0,0,0,0)');
-  grad.addColorStop(1, 'rgba(0,0,0,0.28)');
-  g.fillStyle = grad;
-  g.fillRect(jx, jy, jw, jh);
-  g.fillStyle = 'rgba(0,0,0,0.07)';
-  for (let y = jy; y < jy + jh; y += 3) for (let x = jx + ((y / 3) % 2); x < jx + jw; x += 3) g.fillRect(x, y, 1, 1);
-  fill([jx, jy, jw, 3], u.trim);
-  // Side panels.
-  g.fillStyle = shadeHex(u.trim, 0.9);
-  g.fillRect(jx, jy + 18, 3, jh - 18);
-  g.fillRect(jx + 61, jy + 18, 6, jh - 18);
-  g.fillRect(jx + 125, jy + 18, 3, jh - 18);
+  // ---- Jersey (torso wrap). Front is at x=32, back at x=96, sides at x=0/64/128.
+  const J = ATLAS.jersey;
+  wrapShade(J, u.jersey, 0.24);
+  // Side panels under the arms.
+  g.fillStyle = shadeHex(u.trim, 0.85);
+  for (const sx of [0, 64, 128]) g.fillRect(sx - 4, J[1] + 12, 8, J[3] - 12);
   if (number >= 0) {
-    g.font = `800 34px ${fontFamily}`;
+    g.font = `800 30px ${fontFamily}`;
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    g.lineWidth = 5;
     g.lineJoin = 'round';
-    for (const cx of [32, 96]) {
+    for (const [cx, size] of [[32, 28], [96, 33]] as const) {
+      g.font = `800 ${size}px ${fontFamily}`;
+      g.lineWidth = 4.5;
       g.strokeStyle = u.numOutline;
-      g.strokeText(String(number), jx + cx, jy + 30);
+      g.strokeText(String(number), cx, J[1] + 30);
       g.fillStyle = u.num;
-      g.fillText(String(number), jx + cx, jy + 30);
+      g.fillText(String(number), cx, J[1] + 30);
     }
   } else {
-    // Warm-up jacket: zipper and chest logo stripe.
-    g.fillStyle = shadeHex(u.jersey, 0.6);
-    g.fillRect(jx + 31, jy, 2, jh);
-    fill([jx + 10, jy + 14, 16, 3], u.trim);
+    g.fillStyle = shadeHex(u.jersey, 0.55);
+    g.fillRect(31.4, J[1], 1.2, J[3]); // zipper
+    g.fillStyle = u.trim;
+    g.fillRect(10, J[1] + 14, 14, 2.5); // chest stripe
+    g.fillRect(74, J[1] + 10, 44, 3); // back yoke stripe
   }
-  noise(ATLAS.jersey, 10);
-
-  // Pads & sleeves with stripes.
-  fill(ATLAS.pads, shadeHex(u.jersey, 1.05));
-  fill([ATLAS.pads[0], ATLAS.pads[1] + 9, ATLAS.pads[2], 2], u.trim);
-  fill(ATLAS.sleeve, u.jersey);
-  fill([ATLAS.sleeve[0], ATLAS.sleeve[1] + 3, ATLAS.sleeve[2], 2], u.trim);
-  fill([ATLAS.sleeve[0], ATLAS.sleeve[1] + 7, ATLAS.sleeve[2], 2], u.trim);
-  noise(ATLAS.pads, 8);
-
-  // Pants with side stripes (sides of the cylinder are at u=0 and u=0.5).
-  const [px, py, pw, ph] = ATLAS.pants;
-  for (let x = 0; x < pw; x++) {
-    const side = Math.abs(Math.cos((x / pw) * Math.PI * 2));
-    g.fillStyle = shadeHex(u.pants, 1.0 - side * 0.15);
-    g.fillRect(px + x, py, 1, ph);
+  // Mesh weave.
+  g.fillStyle = 'rgba(0,0,0,0.07)';
+  for (let y = J[1]; y < J[1] + J[3]; y += 1.5) for (let x = J[0] + ((y / 1.5) % 2) * 0.75; x < J[2]; x += 1.5) g.fillRect(x, y, 0.5, 0.5);
+  // Ambient occlusion under the shoulder pads, tuck shadow at the waist.
+  vgrad(J, [[0, 'rgba(0,0,0,0.42)'], [0.12, 'rgba(0,0,0,0.12)'], [0.25, 'rgba(255,255,255,0.06)'], [0.7, 'rgba(0,0,0,0)'], [0.92, 'rgba(0,0,0,0.22)'], [1, 'rgba(0,0,0,0.45)']]);
+  // Folds: from each armpit down toward the waist.
+  for (const sx of [0, 64, 128]) {
+    for (let k = 0; k < 4; k++) {
+      for (const dir of [-1, 1]) {
+        if ((sx === 0 && dir < 0) || (sx === 128 && dir > 0)) continue;
+        const x0 = sx + dir * (3 + k * 2.5);
+        const x1 = sx + dir * (9 + k * 4.5 + rnd() * 3);
+        fold(x0, J[1] + 4 + k * 3, x0 + dir * 3, J[1] + 18 + k * 4, x1, J[1] + 32 + k * 5 + rnd() * 4, 1.0, 0.9 - k * 0.12);
+      }
+    }
   }
+  // Bunching where the jersey tucks into the pants.
+  for (let x = 2; x < 128; x += 5 + rnd() * 4) {
+    const y = J[1] + 46 + rnd() * 6;
+    fold(x, y, x + 2.5, y - 2 - rnd() * 2, x + 5 + rnd() * 2, y + 1, 0.9, 0.8);
+  }
+  // Stretch lines across the chest and back from the pads.
+  for (const cx of [32, 96]) {
+    for (let k = 0; k < 3; k++) {
+      const y = J[1] + 7 + k * 2.5;
+      fold(cx - 18 + rnd() * 4, y, cx, y + 1.8, cx + 18 - rnd() * 4, y, 0.7, 0.5);
+    }
+  }
+  // Collar: trimmed V-neck in front, banded collar in back.
+  if (number >= 0) {
+    g.fillStyle = u.trim;
+    g.beginPath();
+    g.moveTo(32 - 9, J[1]);
+    g.lineTo(32 + 9, J[1]);
+    g.lineTo(32, J[1] + 11);
+    g.closePath();
+    g.fill();
+    g.fillStyle = shadeHex(u.jersey, 0.45);
+    g.beginPath();
+    g.moveTo(32 - 6, J[1]);
+    g.lineTo(32 + 6, J[1]);
+    g.lineTo(32, J[1] + 7.5);
+    g.closePath();
+    g.fill();
+  }
+  g.fillStyle = u.trim;
+  g.fillRect(84, J[1], 24, 2.6);
+  // Occasional grass/dirt stains.
+  for (let i = 0; i < 3; i++) if (rnd() < 0.35) stain(rnd() * 128, J[1] + 20 + rnd() * 34, 2.2, 0.25);
+  noise(J, 9);
+
+  // ---- Shoulder pads: jersey stretched tight, with shine, seams and shoulder stripes.
+  const P = ATLAS.pads;
+  fill(P, shadeHex(u.jersey, 1.04));
+  vgrad(P, [[0, 'rgba(255,255,255,0.28)'], [0.45, 'rgba(255,255,255,0.05)'], [1, 'rgba(0,0,0,0.3)']]);
+  fill([P[0], P[1] + 9, P[2], 1.6], u.trim);
+  fill([P[0], P[1] + 11.8, P[2], 1.6], u.trim);
+  g.strokeStyle = 'rgba(0,0,0,0.3)';
+  g.lineWidth = 0.4;
+  g.setLineDash([1, 1]);
+  for (const x of [16, 32, 48]) {
+    g.beginPath();
+    g.moveTo(x, P[1]);
+    g.lineTo(x, P[1] + P[3]);
+    g.stroke();
+  }
+  g.setLineDash([]);
+  noise(P, 7);
+
+  // ---- Upper arm: short sleeve with stripes and a cuff, bicep below.
+  const A = ATLAS.sleeve;
+  fill(A, u.jersey);
+  wrapShade([A[0], A[1], A[2], 9], u.jersey, 0.2);
+  fill([A[0], A[1] + 4.2, A[2], 1.4], u.trim);
+  fill([A[0], A[1] + 6.4, A[2], 1.4], u.trim);
+  fill([A[0], A[1] + 8.4, A[2], 0.8], shadeHex(u.jersey, 0.6)); // cuff hem
+  wrapShade([A[0], A[1] + 9.2, A[2], A[3] - 9.2], skin, 0.18);
+  vgrad([A[0], A[1] + 9.2, A[2], 2.5], [[0, 'rgba(0,0,0,0.4)'], [1, 'rgba(0,0,0,0)']]); // sleeve shadow on the arm
+  for (let k = 0; k < 3; k++) fold(A[0] + 8 + k * 18, A[1] + 1, A[0] + 12 + k * 18, A[1] + 4, A[0] + 9 + k * 18, A[1] + 8, 0.8, 0.7);
+  noise(A, 6);
+
+  // ---- Pants: side stripes, belt shadow, hip folds and knee creases.
+  const PT = ATLAS.pants;
+  wrapShade(PT, u.pants, 0.17);
   g.fillStyle = u.pantsStripe;
-  g.fillRect(px, py, 2, ph);
-  g.fillRect(px + pw / 2 - 2, py, 4, ph);
-  g.fillRect(px + pw - 2, py, 2, ph);
-  noise(ATLAS.pants, 8);
+  g.fillRect(PT[0], PT[1], 1.6, PT[3]);
+  g.fillRect(PT[0] + 30.2, PT[1], 3.6, PT[3]);
+  g.fillRect(PT[0] + 62.4, PT[1], 1.6, PT[3]);
+  vgrad(PT, [[0, 'rgba(0,0,0,0.35)'], [0.15, 'rgba(0,0,0,0)'], [0.8, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.25)']]);
+  for (const cx of [16, 48]) {
+    fold(cx - 6, PT[1] + 2, cx - 4, PT[1] + 8, cx - 1, PT[1] + 12, 0.9, 0.7);
+    fold(cx + 5, PT[1] + 3, cx + 3, PT[1] + 9, cx + 1, PT[1] + 14, 0.9, 0.6);
+    for (let k = 0; k < 3; k++) {
+      const y = PT[1] + 18.5 + k * 1.8;
+      fold(cx - 7, y, cx, y + 1.2, cx + 7, y - 0.3, 0.7, 0.75); // knee creases
+    }
+  }
+  if (rnd() < 0.55) stain(16 + (rnd() - 0.5) * 8, PT[1] + 20, 3, 0.35); // grass on the knees
+  if (rnd() < 0.4) stain(48 + (rnd() - 0.5) * 8, PT[1] + 21, 2.6, 0.3);
+  noise(PT, 8);
 
-  // Socks with a band, skin, cleats, gloves, belt, knee pads.
-  fill(ATLAS.sock, u.socks);
-  fill([ATLAS.sock[0], ATLAS.sock[1] + 6, ATLAS.sock[2], 4], '#f4f4f0');
-  fill([ATLAS.sock[0], ATLAS.sock[1] + 18, ATLAS.sock[2], 6], '#f4f4f0');
-  fill(ATLAS.skin, skin);
-  noise(ATLAS.skin, 6);
-  fill(ATLAS.shoe, '#161616');
-  fill([ATLAS.shoe[0], ATLAS.shoe[1] + 6, ATLAS.shoe[2], 3], '#e8e8e8');
-  fill(ATLAS.glove, u.glove);
-  fill(ATLAS.belt, '#1a1a1a');
-  fill(ATLAS.knee, shadeHex(u.pants, 1.12));
+  // ---- Shin: pants cuff over the knee, striped game socks, taped ankles.
+  const SK = ATLAS.sock;
+  wrapShade([SK[0], SK[1], SK[2], 4.5], u.pants, 0.15);
+  fill([SK[0], SK[1] + 4.5, SK[2], 0.9], 'rgba(0,0,0,0.45)'); // cuff hem shadow
+  wrapShade([SK[0], SK[1] + 5.4, SK[2], 13], u.socks, 0.2);
+  const band = lightCloth && luma(u.socks) > 0.6 ? u.trim : '#f4f3ee';
+  fill([SK[0], SK[1] + 9, SK[2], 1.6], band);
+  fill([SK[0], SK[1] + 11.4, SK[2], 1.6], band);
+  for (let k = 0; k < 4; k++) fold(SK[0] + 3 + k * 8, SK[1] + 6, SK[0] + 5 + k * 8, SK[1] + 12, SK[0] + 4 + k * 8, SK[1] + 17, 0.6, 0.5);
+  wrapShade([SK[0], SK[1] + 18.4, SK[2], 5.6], '#efeee8', 0.15); // tape / spats
+  g.strokeStyle = 'rgba(0,0,0,0.18)';
+  g.lineWidth = 0.4;
+  for (let k = 0; k < 6; k++) {
+    g.beginPath();
+    g.moveTo(SK[0] + k * 6, SK[1] + 18.4);
+    g.lineTo(SK[0] + k * 6 + 4, SK[1] + 24);
+    g.stroke();
+  }
+  noise(SK, 6);
+
+  // ---- Forearm: skin with a taped wrist.
+  const F = ATLAS.skin;
+  wrapShade(F, skin, 0.16);
+  wrapShade([F[0], F[1] + 19, F[2], 5], '#f1f0ea', 0.12);
+  fill([F[0], F[1] + 18.6, F[2], 0.6], 'rgba(0,0,0,0.25)');
+  noise(F, 6);
+  wrapShade(ATLAS.neck, skin, 0.16);
+  vgrad(ATLAS.neck, [[0, 'rgba(0,0,0,0.35)'], [0.5, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.3)']]);
+
+  // ---- Collar ring, cleats, gloves, belt, knee pads.
+  fill(ATLAS.collar, u.trim);
+  vgrad(ATLAS.collar, [[0, 'rgba(255,255,255,0.25)'], [0.5, 'rgba(0,0,0,0)'], [1, 'rgba(0,0,0,0.4)']]);
+  const SH = ATLAS.shoe;
+  fill(SH, '#141414');
+  fill([SH[0], SH[1] + 5, SH[2], 2.5], u.socks);
+  fill([SH[0], SH[1] + 12, SH[2], 4], '#e9e9e4'); // sole
+  const GL = ATLAS.glove;
+  fill(GL, u.glove);
+  fill([GL[0] + 8, GL[1], 16, GL[3]], shadeHex(u.glove, 0.7)); // palm
+  fill([GL[0], GL[1] + 12, GL[2], 4], '#1a1a1a'); // wrist strap
+  const BL = ATLAS.belt;
+  fill(BL, '#161616');
+  fill([BL[0] + 14, BL[1] + 4, 4, 8], '#8a8a8a');
+  const KN = ATLAS.knee;
+  wrapShade(KN, shadeHex(u.pants, 1.08), 0.2);
+  vgrad(KN, [[0, 'rgba(255,255,255,0.2)'], [1, 'rgba(0,0,0,0.25)']]);
+  if (rnd() < 0.5) stain(KN[0] + 8, KN[1] + 8, 3, 0.3);
   return cv;
 }
 
@@ -257,29 +410,35 @@ export function buildBodyGeometry(): THREE.BufferGeometry {
   const add = (geo: THREE.BufferGeometry, o: PartOpts) => parts.push(finishPart(geo, o));
 
   // Hips / pants waist and belt.
-  add(cyl(0.165, 0.18, 0.24, 8), { bone: BONE.hips, region: A.pants, pos: [0, 1.0, 0], scale: [0.85, 1, 1.15] });
-  add(cyl(0.172, 0.172, 0.04, 8), { bone: BONE.hips, region: A.belt, pos: [0, 1.115, 0], scale: [0.87, 1, 1.16] });
+  add(cyl(0.17, 0.185, 0.24, 10), { bone: BONE.hips, region: A.pants, pos: [0, 1.0, 0], scale: [0.86, 1, 1.15] });
+  add(cyl(0.177, 0.177, 0.04, 10), { bone: BONE.hips, region: A.belt, pos: [0, 1.115, 0], scale: [0.88, 1, 1.16] });
   // V-shaped torso.
-  add(cyl(0.235, 0.17, 0.52, 8), { bone: BONE.spine, region: A.jersey, pos: [0, 1.38, 0], scale: [0.78, 1, 1.18] });
-  // Shoulder pads: a wide yoke plus rounded caps over each shoulder.
-  add(cyl(0.2, 0.27, 0.15, 8), { bone: BONE.spine, region: A.pads, pos: [0, 1.7, 0], scale: [0.85, 1, 1.45] });
-  for (const z of [0.31, -0.31]) {
-    add(sph(0.125, 7, 5), { bone: BONE.spine, region: A.pads, pos: [0, 1.69, z], scale: [1, 0.78, 1] });
+  add(cyl(0.24, 0.175, 0.52, 10), { bone: BONE.spine, region: A.jersey, pos: [0, 1.38, 0], scale: [0.8, 1, 1.18] });
+  // Chest and back plates of the pads push the jersey out, so the torso isn't a plain tube.
+  add(sph(0.2, 10, 6), { bone: BONE.spine, region: A.pads, pos: [0.075, 1.55, 0], scale: [0.62, 0.72, 1.32] });
+  add(sph(0.2, 10, 6), { bone: BONE.spine, region: A.pads, pos: [-0.07, 1.57, 0], scale: [0.56, 0.68, 1.28] });
+  // Shoulder pads: bulky yoke, raised caps and a collar ring.
+  add(cyl(0.22, 0.3, 0.18, 10), { bone: BONE.spine, region: A.pads, pos: [0, 1.71, 0], scale: [0.98, 1, 1.47] });
+  for (const z of [0.322, -0.322]) {
+    add(sph(0.148, 9, 6), { bone: BONE.spine, region: A.pads, pos: [0, 1.715, z], scale: [1.08, 0.86, 1.0] });
   }
+  add(cyl(0.105, 0.125, 0.055, 10), { bone: BONE.spine, region: A.collar, pos: [0, 1.81, 0], scale: [1.0, 1, 1.15] });
   // Neck.
-  add(cyl(0.065, 0.075, 0.13, 6), { bone: BONE.spine, region: A.skin, pos: [0, 1.81, 0] });
-  // Arms.
+  add(cyl(0.066, 0.076, 0.13, 7), { bone: BONE.spine, region: A.neck, pos: [0, 1.83, 0] });
+  // Arms, with deltoid flaps of the pads riding on the upper arm.
   for (const [sh, el, z] of [[BONE.shL, BONE.elL, 0.31], [BONE.shR, BONE.elR, -0.31]] as const) {
-    add(cyl(0.078, 0.062, 0.3, 6), { bone: sh, region: A.sleeve, pos: [0, 1.51, z] });
-    add(cyl(0.06, 0.047, 0.26, 6), { bone: el, region: A.skin, pos: [0, 1.23, z] });
-    add(sph(0.06, 6, 4), { bone: el, region: A.glove, pos: [0.01, 1.07, z], scale: [1.1, 1.25, 0.8] });
+    const out = Math.sign(z);
+    add(sph(0.115, 8, 5), { bone: sh, region: A.pads, pos: [0, 1.6, z + out * 0.05], scale: [1.0, 1.15, 0.7] });
+    add(cyl(0.085, 0.065, 0.3, 8), { bone: sh, region: A.sleeve, pos: [0, 1.51, z] });
+    add(cyl(0.062, 0.048, 0.26, 7), { bone: el, region: A.skin, pos: [0, 1.23, z] });
+    add(sph(0.062, 7, 4), { bone: el, region: A.glove, pos: [0.01, 1.07, z], scale: [1.1, 1.25, 0.8] });
   }
   // Legs.
   for (const [th, kn, z] of [[BONE.thL, BONE.knL, 0.11], [BONE.thR, BONE.knR, -0.11]] as const) {
-    add(cyl(0.108, 0.08, 0.47, 7), { bone: th, region: A.pants, pos: [0, 0.745, z] });
-    add(sph(0.072, 6, 4), { bone: kn, region: A.knee, pos: [0.035, 0.52, z], scale: [0.9, 1.1, 1] });
-    add(cyl(0.072, 0.05, 0.43, 6), { bone: kn, region: A.sock, pos: [0, 0.295, z] });
-    add(box(0.26, 0.085, 0.115), { bone: kn, region: A.shoe, pos: [0.055, 0.043, z] });
+    add(cyl(0.114, 0.083, 0.47, 9), { bone: th, region: A.pants, pos: [0, 0.745, z] });
+    add(sph(0.075, 7, 5), { bone: kn, region: A.knee, pos: [0.036, 0.52, z], scale: [0.9, 1.1, 1] });
+    add(cyl(0.076, 0.052, 0.43, 8), { bone: kn, region: A.sock, pos: [0, 0.295, z] });
+    add(box(0.27, 0.09, 0.12), { bone: kn, region: A.shoe, pos: [0.055, 0.045, z] });
   }
   // Keep each part's own smooth normals (Gouraud-style shading, like the PS2).
   return mergeGeometries(parts, false)!;
