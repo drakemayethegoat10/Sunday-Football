@@ -18,6 +18,10 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the design and [docs/ROADMAP.md](docs/R
 | Move / sprint | WASD or arrows / Shift | Left stick / RT |
 | Snap · juke · dive | Space | A |
 | Spin · stiff arm | Q · E | X · B |
+| Hurdle · truck | C · R | Y · RB |
+| Pass rush (swim · spin · bull) | Space · Q · E | A · X · B |
+| Place a pass | Hold a direction while throwing | Left stick while throwing |
+| Instant replay | R in the play-call menu | X in the play-call menu |
 | Throw | 1–5 or click a receiver (tap = bullet, hold = lob) | A B X Y RB |
 | Switch defender | Tab | B |
 | Kick meter | Space ×3 | A ×3 |

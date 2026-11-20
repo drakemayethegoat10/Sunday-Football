@@ -84,7 +84,16 @@ export const ANIM = {
   Spin: 9,
   Stiff: 10,
   Celebrate: 11,
+  Wrap: 12,
+  Hurdle: 13,
+  Truck: 14,
+  Ragdoll: 15,
+  Stagger: 16,
 } as const;
+
+/** Ragdoll buffer: actor index + 11 parts × (x, y, z, qx, qy, qz, qw), core coordinates. */
+export const RAGDOLL_PARTS = 11;
+export const RAGDOLL_STRIDE = 1 + RAGDOLL_PARTS * 7;
 
 /** Snapshot flag bits. */
 export const FLAG = { User: 1, Carrier: 2, Target: 4, Engaged: 8, Offense: 16 } as const;

@@ -142,6 +142,7 @@ pub struct TeamStats {
     pub punt_yds: f32,
     pub kr_yds: f32,
     pub kr: u32,
+    pub fumbles_lost: u32,
 }
 
 pub struct Game {
@@ -772,7 +773,11 @@ impl Game {
             EndKind::Down | EndKind::OutOfBounds => {
                 if r.turnover {
                     let yd = self.x_to_yd(r.carrier_team, r.spot.x);
-                    self.events.push(Event::Banner { text: "INTERCEPTED!".into(), style: "bad".into() });
+                    let text = if r.fumble { "FUMBLE LOST" } else { "INTERCEPTED!" };
+                    self.events.push(Event::Banner { text: text.into(), style: "bad".into() });
+                    if r.fumble {
+                        self.stats[off as usize].fumbles_lost += 1;
+                    }
                     self.new_possession(r.carrier_team, if yd <= 0.0 { 20.0 } else { yd });
                     self.ball_y = clamp(r.spot.y, HASH_LO, HASH_HI);
                     self.ot_after_change();
@@ -981,7 +986,7 @@ impl Game {
         let st = &mut self.stats[off as usize];
         if r.sack {
             st.sacks += 1;
-        } else if self.play.thrown {
+        } else if self.play.thrown && !r.fumble {
             st.pass_att += 1;
             if r.turnover {
                 st.ints += 1;
@@ -1400,6 +1405,11 @@ impl Game {
         self.play.snapshot(out);
     }
 
+    /// Ragdoll bodies for the renderer (see `physics::RAGDOLL_STRIDE`).
+    pub fn ragdolls(&self, out: &mut Vec<f32>) {
+        self.play.ragdoll_buffer(out);
+    }
+
     pub fn drain_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
     }
@@ -1458,11 +1468,11 @@ mod tests {
             );
             for st in &g.stats {
                 println!(
-                    "   rush {}/{:.0} ({:.1}) | pass {}/{} {:.0} ({:.1} ypa) int {} sk {} | FG {}/{} | punts {} avg {:.0} | KR {} avg {:.0} | pen {}",
+                    "   rush {}/{:.0} ({:.1}) | pass {}/{} {:.0} ({:.1} ypa) int {} sk {} | FG {}/{} | punts {} avg {:.0} | KR {} avg {:.0} | pen {} | fum {}",
                     st.rush_att, st.rush_yds, st.rush_yds / st.rush_att.max(1) as f32,
                     st.comp, st.pass_att, st.pass_yds, st.pass_yds / st.pass_att.max(1) as f32,
                     st.ints, st.sacks, st.fg_made, st.fg_att, st.punts, st.punt_yds / st.punts.max(1) as f32,
-                    st.kr, st.kr_yds / st.kr.max(1) as f32, st.penalties
+                    st.kr, st.kr_yds / st.kr.max(1) as f32, st.penalties, st.fumbles_lost
                 );
             }
         }

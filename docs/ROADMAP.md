@@ -6,7 +6,7 @@ starts after Milestone 1, once the core API has settled, and then keeps pace wit
 ## M0 — Foundation ✅
 Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibition, Pages deploy.
 
-## M1 — Exhibition game ✅ *(current)*
+## M1 — Exhibition game ✅
 - [x] Kickoffs (deep, squib, onside), punts and field goals played on the field, with a
       three-press power/accuracy kick meter, returns, fair catches, touchbacks, muffs,
       onside recoveries and blocked kicks
@@ -27,12 +27,24 @@ Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibiti
 - [x] Quality presets with auto-detection
 - Known for M2: kick returns average about 13 yards (low); scoring runs a bit low in short games.
 
-## M2 — Feel
-- Physics tackling (Rapier): hit angles, momentum, gang tackles, big-hit fumbles
-- Animation system: blended locomotion, catches, throws, tackles, celebrations
-- Ball-carrier move set (hurdle, truck, cutbacks), pass-rush moves, coverage disguises
-- Pass-placement controls (lead, back shoulder, high/low)
-- Instant replay; camera presets polished
+## M2 — Feel ✅ *(current)*
+- [x] Physics tackling: momentum/angle contact model (big hits, wrap-ups that drain the
+      carrier's balance while he drives for yards, broken tackles, gang tackles), then real
+      ragdolls (Rapier, 11 bodies per player, grab joints between tacklers and carrier)
+- [x] Forward progress from physics: the ball is spotted where it is when a knee, hip,
+      torso or head touches the turf
+- [x] Fumbles from big hits and gang-tackle strips, with a live bouncing ball and recoveries
+- [x] Ball-carrier moves: hurdle (beats diving tacklers, risky in the air), truck, plus
+      juke / spin / stiff arm; stagger after broken tackles
+- [x] Pass-rush moves: swim, spin, bull rush (user and CPU)
+- [x] Coverage disguises: safeties show a different shell before the snap
+- [x] Pass placement: hold a direction while throwing to lead / back-shoulder the ball
+- [x] Animation: backpedal and side-shuffle footwork, throw wind-up/follow-through,
+      wrap-up, hurdle, truck and stagger poses, four celebration styles, ragdoll posing
+- [x] Instant replay (pause, scrub, slow-mo, 4 cinematic cameras)
+- [x] Camera: lookahead, hit shake, pull-back on kicks and deep balls
+- [x] Kick returns fixed (return team blocks the coverage); scoring back to realistic levels
+- Known: CPU rushing varies a lot game to game (about 3 yards per carry on average).
 
 ## M3 — League data
 - 32 teams (after TEAMS.md is approved), Sarasota branding from the owner

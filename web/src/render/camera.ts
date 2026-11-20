@@ -35,6 +35,9 @@ export class CameraRig {
   private look = new THREE.Vector3(40, 0, -FIELD_W / 2);
   private angle = 0;
   private snapNext = true;
+  private shakeAmt = 0;
+  private shakeT = 0;
+  private boost = 1;
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(52, aspect, 0.3, 700);
@@ -54,6 +57,11 @@ export class CameraRig {
     save('sf.cam.zoom', this.zoom);
   }
 
+  /** Kick the camera on a big hit. */
+  shake(amount: number) {
+    this.shakeAmt = Math.min(0.6, this.shakeAmt + amount);
+  }
+
   /** Jump instantly on the next update (new game, big teleports). */
   cut() {
     this.snapNext = true;
@@ -63,8 +71,9 @@ export class CameraRig {
    * @param fx, fy focus point in core field coordinates
    * @param dir +1 if the offense attacks toward x = 120
    */
-  update(dt: number, fx: number, fy: number, dir: number) {
+  update(dt: number, fx: number, fy: number, dir: number, zoomBoost = 1) {
     const p = CAMERA_PRESETS[this.preset];
+    this.boost += (zoomBoost - this.boost) * (1 - Math.exp(-dt * 1.8));
     const k = this.snapNext ? 1 : 1 - Math.exp(-dt * 3.2);
     const kPos = this.snapNext ? 1 : 1 - Math.exp(-dt * 2.6);
 
@@ -83,7 +92,7 @@ export class CameraRig {
     const focusY = fy * 0.75 + fyClamped * 0.25;
     this.focus.lerp(new THREE.Vector3(fx, 0, -focusY), k);
 
-    const z = this.zoom;
+    const z = this.zoom * this.boost;
     const want = new THREE.Vector3();
     const lookAt = new THREE.Vector3();
     if (p.side > 0) {
@@ -98,6 +107,44 @@ export class CameraRig {
     this.look.lerp(lookAt, k);
     this.camera.position.copy(this.pos);
     this.camera.lookAt(this.look);
+    this.applyShake(dt);
+    this.snapNext = false;
+  }
+
+  private applyShake(dt: number) {
+    if (this.shakeAmt <= 0.001) return;
+    this.shakeT += dt * 40;
+    const a = this.shakeAmt;
+    this.camera.position.x += Math.sin(this.shakeT * 1.3) * a * 0.35;
+    this.camera.position.y += Math.sin(this.shakeT * 1.7 + 1) * a * 0.25;
+    this.camera.rotateZ(Math.sin(this.shakeT * 1.1) * a * 0.02);
+    this.shakeAmt *= Math.exp(-dt * 6);
+  }
+
+  /** Cinematic replay cameras around a focus point (three.js coordinates). */
+  replay(dt: number, focus: THREE.Vector3, mode: number, t: number) {
+    const k = 1 - Math.exp(-dt * 4);
+    const want = new THREE.Vector3();
+    switch (mode % 4) {
+      case 0: { // slow orbit
+        const a = t * 0.35;
+        want.set(focus.x + Math.cos(a) * 9, 3.2, focus.z + Math.sin(a) * 9);
+        break;
+      }
+      case 1: // low sideline
+        want.set(focus.x - 4, 1.6, focus.z + 12);
+        break;
+      case 2: // end zone
+        want.set(focus.x + 16, 4.5, focus.z + 1);
+        break;
+      default: // sky cam
+        want.set(focus.x - 6, 18, focus.z + 6);
+    }
+    this.pos.lerp(want, this.snapNext ? 1 : k);
+    this.look.lerp(focus.clone().setY(1.0), this.snapNext ? 1 : k * 1.5);
+    this.camera.position.copy(this.pos);
+    this.camera.lookAt(this.look);
+    this.applyShake(dt);
     this.snapNext = false;
   }
 

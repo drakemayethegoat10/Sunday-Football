@@ -18,6 +18,7 @@ import { CameraRig } from './render/camera';
 import { BTN, Input } from './input';
 import { Gamepads, PAD, type PadState } from './gamepad';
 import { KickMeter } from './kickmeter';
+import { Replay } from './replay';
 import { UI, type TeamStatLine, type TitleChoice } from './ui';
 import { Sfx } from './audio';
 import { Quality, type QualityMode } from './quality';
@@ -49,6 +50,9 @@ interface Session {
   finalShown: boolean;
   paused: boolean;
   difficulty: number;
+  rag: Float32Array;
+  ballVel: THREE.Vector3;
+  lastBall: THREE.Vector3;
 }
 
 let renderer: THREE.WebGLRenderer | null = null;
@@ -61,6 +65,7 @@ let showFps = false;
 let fpsFrames = 0;
 let fpsTime = 0;
 let usingPad = false;
+const replay = new Replay();
 
 const meter = new KickMeter((power, accuracy) => {
   session?.game.kick(power, accuracy);
@@ -132,6 +137,9 @@ function newSession(home: TeamInfo, away: TeamInfo, o: SessionOpts): Session {
     finalShown: false,
     paused: false,
     difficulty: o.difficulty,
+    rag: new Float32Array(0),
+    ballVel: new THREE.Vector3(),
+    lastBall: new THREE.Vector3(),
   };
   meter.fillTime = [1.25, 0.95, 0.8, 0.68][o.difficulty] ?? 0.95;
   applyLineup(s);
@@ -141,7 +149,9 @@ function newSession(home: TeamInfo, away: TeamInfo, o: SessionOpts): Session {
 }
 
 function applyLineup(s: Session) {
-  const lineup = JSON.parse(s.game.lineup()) as LineupEntry[];
+  const json = s.game.lineup();
+  const lineup = JSON.parse(json) as LineupEntry[];
+  if (!s.attract) replay.begin(json);
   s.players.setLineup(lineup);
   s.lineup = s.hud.lineup;
   s.prev.set(s.cur);
@@ -238,6 +248,40 @@ function callTimeout(s: Session) {
   }
 }
 
+function enterReplay(s: Session) {
+  if (!replay.enter()) return;
+  ui.closeMenu();
+  s.players.setLineup(JSON.parse(replay.last!.lineup) as LineupEntry[]);
+  s.cam.cut();
+  setReplayBar(true);
+  sfx.ui();
+}
+
+function exitReplay(s: Session) {
+  replay.exit();
+  s.players.setLineup(JSON.parse(s.game.lineup()) as LineupEntry[]);
+  s.menuDelay = 0.5;
+  s.cam.cut();
+  setReplayBar(false);
+}
+
+function setReplayBar(show: boolean) {
+  const el = document.getElementById('replay-bar')!;
+  el.hidden = !show;
+}
+
+function replayKey(s: Session, code: string): boolean {
+  switch (code) {
+    case 'Space': replay.paused = !replay.paused; return true;
+    case 'ArrowLeft': case 'KeyA': replay.scrub(-1); return true;
+    case 'ArrowRight': case 'KeyD': replay.scrub(1); return true;
+    case 'KeyS': replay.speed = replay.speed === 1 ? 0.3 : 1; return true;
+    case 'KeyV': replay.cam++; s.cam.cut(); return true;
+    case 'KeyR': case 'Escape': case 'Enter': case 'Backspace': exitReplay(s); return true;
+  }
+  return true;
+}
+
 function meterActive(s: Session | null): boolean {
   return !!s && !s.attract && s.hud.user_kicking && !s.paused;
 }
@@ -256,7 +300,15 @@ function onKey(e: KeyboardEvent): boolean {
     if (e.code === 'Enter' && !e.repeat) quitToTitle();
     return true;
   }
+  if (replay.active) {
+    if (!e.repeat) replayKey(s, e.code);
+    return true;
+  }
   if (ui.menuOpen && !s.paused) {
+    if (e.code === 'KeyR' && !e.repeat) {
+      enterReplay(s);
+      return true;
+    }
     if (e.code === 'KeyT') {
       callTimeout(s);
       return true;
@@ -344,6 +396,18 @@ function handlePad(p: PadState, s: Session | null) {
     if (p.pressed.has(PAD.A) || p.pressed.has(PAD.Menu)) quitToTitle();
     return;
   }
+  if (replay.active) {
+    if (p.pressed.has(PAD.A)) replay.paused = !replay.paused;
+    if (p.pressed.has(PAD.X)) replay.speed = replay.speed === 1 ? 0.3 : 1;
+    if (p.pressed.has(PAD.View)) {
+      replay.cam++;
+      s.cam.cut();
+    }
+    if (p.nav === 'left') replay.scrub(-1);
+    if (p.nav === 'right') replay.scrub(1);
+    if (p.pressed.has(PAD.B) || p.pressed.has(PAD.Menu)) exitReplay(s);
+    return;
+  }
   if (p.pressed.has(PAD.Menu)) {
     togglePause();
     return;
@@ -360,6 +424,7 @@ function handlePad(p: PadState, s: Session | null) {
     if (p.pressed.has(PAD.LB)) ui.menuNav('tabPrev');
     if (p.pressed.has(PAD.RB)) ui.menuNav('tabNext');
     if (p.pressed.has(PAD.Y)) callTimeout(s);
+    if (p.pressed.has(PAD.X)) enterReplay(s);
     if (p.nav || p.pressed.size) sfx.ui();
     return;
   }
@@ -378,10 +443,12 @@ function handlePad(p: PadState, s: Session | null) {
   }
   const flags = userFlags(s);
   const carrier = (flags & FLAG.Carrier) !== 0;
+  const engaged = (flags & FLAG.Engaged) !== 0;
   if (p.pressed.has(PAD.A)) input.press(BTN.Action);
   if (p.pressed.has(PAD.X)) input.press(BTN.Spin);
-  if (p.pressed.has(PAD.B)) input.press(carrier ? BTN.Stiff : BTN.Switch);
-  if (p.pressed.has(PAD.Y)) input.press(BTN.FairCatch);
+  if (p.pressed.has(PAD.B)) input.press(carrier || engaged ? BTN.Stiff : BTN.Switch);
+  if (p.pressed.has(PAD.Y)) input.press(BTN.FairCatch | BTN.Hurdle);
+  if (p.pressed.has(PAD.RB)) input.press(BTN.Truck);
 }
 
 // ---------------------------------------------------------------------------
@@ -425,6 +492,26 @@ function handleEvents(s: Session, events: GameEvent[]) {
       case 'broken_tackle':
         sfx.hit(false);
         sfx.roar(0.2);
+        break;
+      case 'wrap':
+        sfx.hit(false);
+        break;
+      case 'big_hit':
+        sfx.hit(true);
+        sfx.roar(0.45);
+        s.cam.shake(0.35);
+        break;
+      case 'truck':
+        sfx.hit(true);
+        sfx.roar(0.5);
+        s.cam.shake(0.3);
+        break;
+      case 'hurdle':
+        sfx.roar(0.25);
+        break;
+      case 'fumble':
+        sfx.roar(0.8);
+        s.cam.shake(0.2);
         break;
       case 'incomplete':
       case 'out_of_bounds':
@@ -477,8 +564,10 @@ function contextHint(s: Session): string {
   if ((h.special === 'punt' || h.special === 'kickoff') && h.user_side === 'defense' && !(flags & FLAG.Carrier)) {
     return h.special === 'punt' ? `Get under it  ·  ${pad ? 'Y' : 'F'}  fair catch` : 'Get under the kick!';
   }
-  if (flags & FLAG.Carrier && !up) return pad ? 'RT sprint  ·  A juke  ·  X spin  ·  B stiff arm' : 'SHIFT sprint  ·  SPACE juke  ·  Q spin  ·  E stiff arm';
-  if (up) return pad ? 'A B X Y RB  throw  ·  tap = bullet, hold = lob' : '1–5 or click a receiver to throw  ·  tap = bullet, hold = lob';
+  if (flags & FLAG.Carrier && !up)
+    return pad ? 'RT sprint · A juke · X spin · B stiff arm · Y hurdle · RB truck' : 'SHIFT sprint · SPACE juke · Q spin · E stiff arm · C hurdle · R truck';
+  if (flags & FLAG.Engaged && h.user_side === 'defense') return pad ? 'A swim · X spin · B bull rush' : 'SPACE swim · Q spin · E bull rush';
+  if (up) return pad ? 'A B X Y RB throw · tap bullet, hold lob · stick places the ball' : '1–5 / click to throw · tap bullet, hold lob · hold a direction to place it';
   if (h.user_side === 'defense' || !(flags & FLAG.Offense)) return pad ? 'B switch  ·  A dive  ·  RT sprint' : 'TAB switch  ·  SPACE dive  ·  SHIFT sprint';
   return pad ? 'RT sprint' : 'SHIFT sprint';
 }
@@ -495,6 +584,10 @@ function frame(now: number, draw = true) {
   const s = session;
   handlePad(pads.poll(dt), s);
   if (!s || !renderer) return;
+  if (replay.active) {
+    replayFrame(s, dt, draw);
+    return;
+  }
 
   // Fixed-step simulation.
   if (!s.paused) {
@@ -506,6 +599,8 @@ function frame(now: number, draw = true) {
       s.prev.set(s.cur);
       s.game.step(STEP, mx, my, first ? fi.buttons : fi.buttons & BTN.Sprint, first ? fi.throwTo : 0, fi.throwKind);
       s.cur = s.game.snapshot();
+      s.rag = s.game.ragdolls();
+      if (!s.attract && s.hud.phase === 'inplay') replay.record(s.cur, s.rag);
       acc -= STEP;
       first = false;
     }
@@ -517,7 +612,7 @@ function frame(now: number, draw = true) {
   handleEvents(s, JSON.parse(s.game.events()) as GameEvent[]);
 
   s.players.padIcons = usingPad;
-  s.players.update(s.prev, s.cur, alpha, dt, time);
+  s.players.update(s.prev, s.cur, alpha, dt, time, s.rag);
   const scrimmageLines = s.hud.situation !== 'kickoff' && !s.hud.special;
   s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, scrimmageLines && s.hud.to_go !== 'Goal', s.hud.down, s.hud.dir);
   s.stadium.setScoreboard(s.hud);
@@ -532,10 +627,19 @@ function frame(now: number, draw = true) {
     fx = h.los_x - h.dir * 3;
     fy = h.ball_y;
   } else {
-    fx = s.players.ballPos.x;
-    fy = -s.players.ballPos.z;
+    // Look a little ahead of where the ball is going.
+    fx = s.players.ballPos.x + s.ballVel.x * 0.3;
+    fy = -(s.players.ballPos.z + s.ballVel.z * 0.3);
   }
-  s.cam.update(dt, fx, fy, h.dir);
+  if (dt > 0) {
+    const v = new THREE.Vector3().subVectors(s.players.ballPos, s.lastBall).divideScalar(dt);
+    if (v.length() < 40) s.ballVel.lerp(v, 1 - Math.exp(-dt * 4));
+    s.lastBall.copy(s.players.ballPos);
+  }
+  // Pull back for kicks and deep balls.
+  const bz = s.players.ballPos.y;
+  const boost = h.play_phase === 'live' ? (h.special && bz > 2.5 ? 1.35 : 1 + Math.min(Math.max(bz - 3, 0), 12) / 40) : 1;
+  s.cam.update(dt, fx, fy, h.dir, boost);
 
   if (!s.attract) {
     ui.updateHud(h, s.teams);
@@ -593,6 +697,23 @@ function frame(now: number, draw = true) {
     fpsTime = 0;
   }
 
+  if (draw) pipeline!.render(s.scene, s.cam.camera);
+}
+
+function replayFrame(s: Session, dt: number, draw: boolean) {
+  replay.advance(dt);
+  const f = replay.frames();
+  if (!f) {
+    exitReplay(s);
+    return;
+  }
+  s.players.update(f.a.snap, f.b.snap, f.alpha, dt * replay.speed, time, f.b.rag);
+  s.cam.replay(dt, s.players.ballPos, replay.cam, replay.time);
+  const pct = replay.length > 1 ? replay.t / (replay.length - 1) : 0;
+  (document.querySelector('#replay-bar .rb-fill') as HTMLElement).style.width = `${Math.round(pct * 100)}%`;
+  (document.querySelector('#replay-bar .rb-state') as HTMLElement).textContent =
+    (replay.paused ? 'PAUSED' : replay.speed < 1 ? 'SLOW-MO' : 'PLAYING') + ` · CAM ${(replay.cam % 4) + 1}`;
+  ui.hint('');
   if (draw) pipeline!.render(s.scene, s.cam.camera);
 }
 
@@ -658,6 +779,7 @@ if (import.meta.env.DEV) {
   (window as unknown as Record<string, unknown>).__sf = {
     hud: () => session?.hud,
     game: () => session?.game,
+    replay: () => replay,
     /** Show a painted uniform atlas full-size on the page (for checking textures). */
     async atlas(teamIdx = 0, number = 27, home = true) {
       const { paintUniform, SKIN_TONES } = await import('./render/athlete');

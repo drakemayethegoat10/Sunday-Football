@@ -48,11 +48,13 @@ docs/           This file, ROADMAP.md, TEAMS.md.
 
 1. **Smooth, weighty movement.** Acceleration, top speed, cutting and momentum come from
    ratings, so stars feel like stars.
-2. **Physics-based tackling, like Backbreaker.** Milestone 0 resolves tackles with
-   rating-driven contact math. Milestone 2 replaces this with a real physics layer
-   (Rapier, which also compiles to WebAssembly): active-ragdoll-style bodies, hit angle
-   and momentum, forward progress, gang tackles, and fumbles from big hits.
-   The web build runs physics only for players in or near contact.
+2. **Physics-based tackling, like Backbreaker.** A contact model in the core turns
+   momentum, hit angle and ratings into big hits, wrap-ups (the carrier keeps driving
+   while his balance drains), broken tackles and gang tackles. Completed tackles become
+   Rapier ragdolls (11 bodies per player, joint limits, grab joints between tacklers and
+   carrier); the ball is spotted where it is when the carrier's knee, hip or torso hits
+   the turf. Big hits and gang tackles can force fumbles. Physics only runs for players
+   who are going down, so it stays cheap on Chromebooks.
 3. **"Bucket" passing.** The QB solves a real ballistic throw to a point where only the
    receiver can get it. He leads the receiver, puts the ball away from the nearest
    defender, and lofts it over underneath coverage. Ratings, pressure and throwing on the
@@ -76,6 +78,10 @@ skill area, fatigue. Quarter length defaults to 5 minutes with an accelerated cl
 | Sprint | Shift | RT |
 | Snap / Juke / Dive tackle | Space | A |
 | Spin / Stiff arm | Q / E | X / B |
+| Hurdle / Truck | C / R | Y / RB |
+| Pass rush: swim / spin / bull rush | Space / Q / E | A / X / B |
+| Place the pass | Hold a direction while throwing | Left stick while throwing |
+| Instant replay | R (play call) | X (play call) |
 | Throw to receiver | 1–5 or **click the receiver** (tap = bullet, hold = lob) | A B X Y RB (tap / hold) |
 | Switch defender | Tab | B |
 | Kick meter | Space ×3 (start, power, accuracy) | A ×3 |

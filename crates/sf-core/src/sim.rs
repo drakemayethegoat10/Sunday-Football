@@ -9,6 +9,8 @@ use crate::math::*;
 use crate::player::{Player, Pos, Ratings, Team};
 use crate::playbook::*;
 use crate::rng::Rng;
+use crate::physics::Physics;
+use crate::contact::RushMove;
 
 pub const FIELD_LEN: f32 = 120.0;
 pub const FIELD_W: f32 = 53.333;
@@ -38,6 +40,11 @@ pub enum Anim {
     Spin = 9,
     Stiff = 10,
     Celebrate = 11,
+    Wrap = 12,
+    Hurdle = 13,
+    Truck = 14,
+    Ragdoll = 15,
+    Stagger = 16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +54,8 @@ pub enum Move {
     Spin,
     Stiff,
     Dive,
+    Hurdle,
+    Truck,
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +123,14 @@ pub struct Actor {
     pub tried_catch: bool,
     /// 1–5 receiver icon (0 = none).
     pub icon: u8,
+    /// Simulated by ragdoll physics (tackled).
+    pub ragdoll: bool,
+    /// Hanging onto the ball carrier.
+    pub wrapping: bool,
+    pub wrap_off: V2,
+    pub rush_cd: f32,
+    /// Knocked off balance (brief slowdown).
+    pub stagger: f32,
 }
 
 impl Actor {
@@ -150,6 +167,11 @@ impl Actor {
             bite: 0.0,
             tried_catch: false,
             icon: 0,
+            ragdoll: false,
+            wrapping: false,
+            wrap_off: V2::ZERO,
+            rush_cd: 0.0,
+            stagger: 0.0,
         }
     }
     pub(crate) fn upright(&self) -> bool {
@@ -230,6 +252,8 @@ pub struct PlayResult {
     pub sack: bool,
     pub text: String,
     pub flags: Vec<Flag>,
+    /// Possession changed on a fumble.
+    pub fumble: bool,
     /// Field goal / extra point result.
     pub fg: Option<bool>,
     /// Kickoff went out of bounds.
@@ -254,6 +278,9 @@ pub struct Input {
     pub throw_kind: u8,
     /// Signal a fair catch on a punt (edge-triggered).
     pub fair_catch: bool,
+    /// Ball carrier: hurdle / truck (edge-triggered).
+    pub hurdle: bool,
+    pub truck: bool,
 }
 
 pub struct PlaySetup<'a> {
@@ -318,6 +345,21 @@ pub struct Play {
     /// Kick parameters from the user's kick meter, waiting to be used.
     pub kick_input: Option<KickParams>,
     pub fair_catch_signal: bool,
+    /// Ragdoll physics world (created on the first tackle of the play).
+    pub physics: Option<Box<Physics>>,
+    /// Defenders currently wrapped up on the ball carrier.
+    pub wraps: Vec<usize>,
+    /// Ball carrier's balance while wrapped (falls at 0).
+    pub balance: f32,
+    /// The carrier is going down (ragdoll) and the play ends when he's down by contact.
+    pub falling: bool,
+    pub fall_sack: bool,
+    pub fumble: bool,
+    pub fumble_vel: V3,
+    pub fumble_t: f32,
+    pub fumble_team: u8,
+    pub fumble_lost: bool,
+    pub user_rush: Option<RushMove>,
 }
 
 fn off_roster(team: &Team, slot: OSlot, f: &Formation) -> usize {
@@ -564,7 +606,19 @@ impl Play {
             None => None,
         };
 
-        let _ = rng; // reserved for pre-snap randomness (audibles, shifts)
+        // Coverage disguise: show a different safety shell before the snap, then rotate.
+        if rng.chance(0.4) {
+            let fs = 11 + DSlot::FS as usize;
+            let ss = 11 + DSlot::SS as usize;
+            let single_high = matches!(actors[fs].task, Task::Zone { deep: true, .. }) && !matches!(actors[ss].task, Task::Zone { deep: true, .. });
+            if single_high {
+                actors[fs].p = to_world(13.0, 9.0);
+                actors[ss].p = to_world(13.0, -9.0);
+            } else {
+                actors[ss].p = to_world(7.5, -5.0);
+                actors[fs].p = to_world(15.0, 0.0);
+            }
+        }
         Play {
             actors,
             ball: Ball::Loose(V3::new(los_x, ball_y, 0.15)),
@@ -606,6 +660,17 @@ impl Play {
             special: None,
             kick_input: None,
             fair_catch_signal: false,
+            physics: None,
+            wraps: Vec::new(),
+            balance: 1.0,
+            falling: false,
+            fall_sack: false,
+            fumble: false,
+            fumble_vel: V3::default(),
+            fumble_t: 0.0,
+            fumble_team: 0,
+            fumble_lost: false,
+            user_rush: None,
         }
     }
 
@@ -652,6 +717,17 @@ impl Play {
             special: None,
             kick_input: None,
             fair_catch_signal: false,
+            physics: None,
+            wraps: Vec::new(),
+            balance: 1.0,
+            falling: false,
+            fall_sack: false,
+            fumble: false,
+            fumble_vel: V3::default(),
+            fumble_t: 0.0,
+            fumble_team: 0,
+            fumble_lost: false,
+            user_rush: None,
         }
     }
 
@@ -708,6 +784,11 @@ impl Play {
         match &self.ball {
             Ball::Held(i) => {
                 let a = &self.actors[*i];
+                if a.ragdoll {
+                    if let Some(b) = self.ragdoll_ball(*i) {
+                        return b;
+                    }
+                }
                 let f = a.facing_v();
                 let h = if a.anim == Anim::Down { 0.35 } else if a.anim == Anim::Throw { 1.9 } else { 1.15 };
                 V3::new(a.p.x + f.x * 0.32, a.p.y + f.y * 0.32, a.z + h)
@@ -795,7 +876,11 @@ impl Play {
 
     fn step_over(&mut self, dt: f32) {
         self.over_t += dt;
+        self.physics_step(dt);
         for a in self.actors.iter_mut() {
+            if a.ragdoll {
+                continue;
+            }
             a.v = a.v * (1.0 - (4.0 * dt).min(1.0));
             a.p += a.v * dt;
             if a.ground > 0.0 {
@@ -819,6 +904,8 @@ impl Play {
             a.move_cd = (a.move_cd - dt).max(0.0);
             a.tackle_cd = (a.tackle_cd - dt).max(0.0);
             a.bite = (a.bite - dt).max(0.0);
+            a.rush_cd = (a.rush_cd - dt).max(0.0);
+            a.stagger = (a.stagger - dt).max(0.0);
             if a.move_t > 0.0 {
                 a.move_t -= dt;
                 if a.move_t <= 0.0 {
@@ -901,9 +988,10 @@ impl Play {
             self.coverage_holding(dt, rng);
         }
 
-        // 9. Tackles.
+        // 9. Contact: tackles, wrap-ups, ragdolls, fumbles.
+        self.physics_step(dt);
         if self.phase == PlayPhase::Live {
-            self.tackles(rng);
+            self.contact_step(dt, rng);
         }
 
         // 10. Score / boundaries.
@@ -959,17 +1047,29 @@ impl Play {
                 self.start_move(u, Move::Spin, hint, rng);
             } else if input.stiff {
                 self.start_move(u, Move::Stiff, hint, rng);
+            } else if input.hurdle {
+                self.start_move(u, Move::Hurdle, hint, rng);
+            } else if input.truck {
+                self.start_move(u, Move::Truck, hint, rng);
+            }
+        } else if !user_has_ball && self.actors[u].engaged.is_some() {
+            // Engaged with a blocker: pass-rush moves.
+            if input.action {
+                self.user_rush = Some(RushMove::Swim);
+            } else if input.spin {
+                self.user_rush = Some(RushMove::Spin);
+            } else if input.stiff {
+                self.user_rush = Some(RushMove::Bull);
             }
         } else if !user_has_ball && input.action && self.actors[u].mv == Move::None && self.actors[u].upright() {
-            if self.actors[u].engaged.is_none() {
-                self.start_move(u, Move::Dive, hint, rng);
-            }
+            self.start_move(u, Move::Dive, hint, rng);
         }
 
         // Throws.
         if input.throw_to > 0 && self.user_is_offense() && self.qb_in_pocket() && !self.thrown && self.is_pass() && (!self.play_action() || self.t > 0.6) {
             if let Some(r) = (0..11).find(|&j| self.actors[j].icon == input.throw_to) {
-                self.throw_to(r, input.throw_kind.min(2), rng);
+                // Placement: the stick direction at release leads / back-shoulders the throw.
+                self.throw_to(r, input.throw_kind.min(2), V2::new(input.mx, input.my), rng);
             }
         }
     }
@@ -1020,6 +1120,17 @@ impl Play {
                 a.mv = Move::Dive;
                 a.move_t = 0.4;
                 a.move_cd = 1.0;
+            }
+            Move::Hurdle => {
+                a.mv = Move::Hurdle;
+                a.move_t = 0.55;
+                a.move_cd = 1.4;
+                self.events.push(Event::Hurdle);
+            }
+            Move::Truck => {
+                a.mv = Move::Truck;
+                a.move_t = 0.5;
+                a.move_cd = 1.1;
             }
             Move::None => {}
         }
@@ -1200,7 +1311,7 @@ impl Play {
             let r = self.route_actors[k.min(self.route_actors.len() - 1)];
             if ready(self, r) && self.separation(r) > thresh {
                 let kind = self.auto_throw_kind(r);
-                self.throw_to(r, kind, rng);
+                self.throw_to(r, kind, V2::ZERO, rng);
                 return;
             }
         }
@@ -1215,7 +1326,7 @@ impl Play {
             if let Some((r, sep)) = best {
                 if sep > 1.3 {
                     let kind = self.auto_throw_kind(r);
-                    self.throw_to(r, kind, rng);
+                    self.throw_to(r, kind, V2::ZERO, rng);
                     return;
                 }
             }
@@ -1247,7 +1358,7 @@ impl Play {
 
     /// The "bucket" throw: lead the receiver, keep the ball away from the closest
     /// defender, then add error from accuracy, distance and pressure.
-    fn throw_to(&mut self, r: usize, kind: u8, rng: &mut Rng) {
+    fn throw_to(&mut self, r: usize, kind: u8, place: V2, rng: &mut Rng) {
         let qb = &self.actors[QB];
         let power = 16.5 + qb.r.throw_power as f32 * 0.115;
         let hspeed = power * [0.97, 0.84, 0.68][kind as usize];
@@ -1294,6 +1405,8 @@ impl Play {
         if qb.v.len() > 2.5 {
             sigma += 0.4;
         }
+        // User placement: up to ~2 yards in the stick direction.
+        target += place.clamp_len(1.0) * 2.0;
         target += V2::new(rng.normal() * sigma, rng.normal() * sigma * 0.8);
         self.target_name = rc.name.clone();
         self.throw_at(target, Some(r), kind, rng);
@@ -1480,7 +1593,7 @@ impl Play {
             Task::Escort => self.escort_desire(i),
             Task::Hold { spot } => arrive(a.p, *spot, a.top * 0.85),
             Task::Cover { lane } => self.cover_desire(i, *lane),
-            Task::ReturnBlock { home } => arrive(a.p, *home, a.top * 0.9),
+            Task::ReturnBlock { home } => self.return_block_desire(i, *home),
             Task::Returner => self.returner_desire(i),
             Task::Fetch => seek(a.p, self.ball_pos().xy(), a.top),
         }
@@ -1700,9 +1813,14 @@ impl Play {
 
     fn integrate(&mut self, i: usize, desired: V2, dt: f32) {
         let is_carrier = self.carrier == Some(i);
+        let drag = if is_carrier && !self.wraps.is_empty() { (1.0 - 0.55 * self.wraps.len() as f32).max(0.15) } else { 1.0 };
         let a = &mut self.actors[i];
-        if a.engaged.is_some() {
+        if a.engaged.is_some() || a.wrapping || a.ragdoll {
             return;
+        }
+        if a.mv == Move::Hurdle {
+            let k = clamp(1.0 - a.move_t / 0.55, 0.0, 1.0);
+            a.z = (k * std::f32::consts::PI).sin() * 0.6;
         }
         if !a.upright() {
             a.v = a.v * (1.0 - (6.0 * dt).min(1.0));
@@ -1734,7 +1852,13 @@ impl Play {
                 let lat_max = max_acc * (0.75 + a.r.agility as f32 * 0.007);
                 a.v += along.clamp_len(along_max * dt) + lat.clamp_len(lat_max * dt);
             }
-            let cap = a.top * if a.mv == Move::Juke { 1.1 } else { 1.0 } * if is_carrier { 0.98 } else { 1.0 };
+            let mut cap = a.top * if a.mv == Move::Juke { 1.1 } else { 1.0 } * if is_carrier { 0.98 } else { 1.0 } * drag;
+            if a.stagger > 0.0 {
+                cap *= 0.7;
+            }
+            if a.mv == Move::Truck {
+                cap *= 0.92;
+            }
             a.v = a.v.clamp_len(cap);
         } else {
             a.z = 0.35;
@@ -1794,7 +1918,7 @@ impl Play {
         // New engagements.
         for b in 0..N {
             let ba = &self.actors[b];
-            let blocker = matches!(ba.task, Task::Block { .. } | Task::Escort)
+            let blocker = matches!(ba.task, Task::Block { .. } | Task::Escort | Task::ReturnBlock { .. })
                 || matches!(&ba.task, Task::Route { delay, .. } if self.t < *delay);
             if !blocker || ba.engaged.is_some() || !ba.upright() || ba.stun > 0.0 || self.carrier == Some(b) {
                 continue;
@@ -1805,7 +1929,7 @@ impl Play {
             let (bteam, bpos) = (ba.team, ba.p);
             for d in 0..N {
                 let da = &self.actors[d];
-                if da.team == bteam || da.engaged.is_some() || !da.upright() || self.carrier == Some(d) {
+                if da.team == bteam || da.engaged.is_some() || !da.upright() || self.carrier == Some(d) || da.wrapping {
                     continue;
                 }
                 if da.p.dist(bpos) < 1.0 {
@@ -1881,6 +2005,20 @@ impl Play {
                     }
                 }
             }
+            // Pass-rush moves: the user's on demand, the CPU's now and then.
+            if self.actors[d].rush_cd <= 0.0 && self.actors[d].engage_t > 0.35 && self.is_pass() && self.qb_in_pocket() {
+                let user_move = if self.user == Some(d) { self.user_rush.take() } else { None };
+                let cpu_move = if self.user != Some(d) && rng.chance(dt * 0.45) {
+                    Some(*rng.pick(&[RushMove::Swim, RushMove::Spin, RushMove::Bull]))
+                } else {
+                    None
+                };
+                if let Some(mv) = user_move.or(cpu_move) {
+                    if self.rush_move(d, b, mv, rng) {
+                        continue;
+                    }
+                }
+            }
             // Offensive holding: more likely when the blocker is getting beaten.
             if self.flags.is_empty() && self.actors[b].team == self.off_team && self.special.is_none() {
                 let hazard = (0.0022 + diff.max(0.0) * 0.00035) * self.penalty_rate;
@@ -1902,7 +2040,7 @@ impl Play {
         for i in 0..N {
             for j in (i + 1)..N {
                 let (ai, aj) = (&self.actors[i], &self.actors[j]);
-                if !ai.upright() || !aj.upright() || ai.engaged == Some(j) {
+                if !ai.upright() || !aj.upright() || ai.engaged == Some(j) || ai.wrapping || aj.wrapping {
                     continue;
                 }
                 let d = aj.p - ai.p;
@@ -2081,109 +2219,9 @@ impl Play {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Tackling (rating-driven contact model; physics comes in milestone 2)
-    // -----------------------------------------------------------------------
+    // Tackling lives in contact.rs (contact model + ragdoll physics).
 
-    fn tackles(&mut self, rng: &mut Rng) {
-        let Some(c) = self.carrier else { return };
-        let ca = self.actors[c].clone();
-        let cfwd = if ca.v.len() > 0.3 { ca.v.norm() } else { ca.facing_v() };
-        let mut gang = 0usize;
-        for j in 0..N {
-            let o = &self.actors[j];
-            if o.team != ca.team && o.upright() && o.p.dist(ca.p) < 1.6 {
-                gang += 1;
-            }
-        }
-        for j in 0..N {
-            if self.actors[j].team == ca.team || self.actors[j].tackle_cd > 0.0 || self.actors[j].stun > 0.0 {
-                continue;
-            }
-            let o = self.actors[j].clone();
-            let diving = o.mv == Move::Dive;
-            if !o.upright() && !diving {
-                continue;
-            }
-            let range = if diving { 1.6 } else { 0.95 };
-            let dist = o.p.dist(ca.p);
-            if dist > range {
-                continue;
-            }
-            let to_def = (o.p - ca.p).norm();
-            let front = cfwd.dot(to_def) > 0.3;
-            let behind = cfwd.dot(to_def) < -0.4;
-            let closing = (o.v - ca.v).dot((ca.p - o.p).norm());
-
-            let mut p = 0.66 + (o.r.tackle as f32 - 60.0) * 0.008;
-            let eva = ca.r.strength as f32 * 0.4 + ca.r.agility as f32 * 0.35 + ca.r.carrying as f32 * 0.25;
-            p -= (eva - 60.0) * 0.006;
-            p += closing.max(0.0) * 0.025;
-            if behind {
-                p += 0.08;
-            }
-            if o.engaged.is_some() {
-                p -= 0.35;
-            }
-            if diving {
-                p += 0.1;
-            }
-            p += gang.saturating_sub(1) as f32 * 0.12;
-            if c == QB && self.qb_in_pocket() {
-                p += 0.12;
-            }
-            if ca.move_t > 0.0 {
-                let ag = ca.r.agility as f32 / 99.0;
-                match ca.mv {
-                    Move::Juke if front => p -= 0.38 * ag,
-                    Move::Spin if !front => p -= 0.32 * ag,
-                    Move::Spin => p -= 0.15 * ag,
-                    Move::Stiff if front => {
-                        let w = clamp((ca.r.strength as f32 - o.r.strength as f32 + 45.0) / 80.0, 0.0, 1.0);
-                        p -= 0.45 * w;
-                    }
-                    _ => {}
-                }
-            }
-            p = clamp(p, 0.05, 0.97);
-
-            self.actors[j].tackle_cd = 0.45;
-            if rng.chance(p) {
-                // Forward progress from momentum.
-                let td = self.team_dir(ca.team);
-                let fwd = V2::new(td, 0.0);
-                let m1 = ca.mass * ca.v.dot(fwd).max(0.0);
-                let m2 = o.mass * (-o.v.dot(fwd)).max(0.0);
-                let fall = clamp((m1 - m2) / (ca.mass + o.mass) * 0.35, -1.2, 1.8);
-                let spot = ca.p + fwd * fall;
-                let big = closing > 6.5;
-                self.events.push(Event::Tackle { big });
-                self.last_tackler = Some(j);
-                self.actors[c].anim = Anim::Down;
-                self.actors[c].ground = 2.0;
-                self.actors[c].p = spot;
-                if diving || big {
-                    self.actors[j].anim = Anim::Down;
-                    self.actors[j].ground = 1.4;
-                }
-                let sack = c == QB && self.qb_in_pocket() && (spot.x - self.los_x) * self.dir < 0.0;
-                self.finish_down(spot, sack);
-                return;
-            } else {
-                self.events.push(Event::BrokenTackle);
-                self.actors[j].stun = 0.45 + rng.f32() * 0.4;
-                if diving {
-                    self.actors[j].ground = 1.0;
-                }
-                self.actors[c].v = self.actors[c].v * 0.75;
-                if ca.mv == Move::Stiff && front {
-                    self.actors[j].v = to_def * 3.0;
-                }
-            }
-        }
-    }
-
-    fn finish_down(&mut self, spot: V2, sack: bool) {
+    pub(crate) fn finish_down(&mut self, spot: V2, sack: bool) {
         let c = self.carrier.unwrap_or(QB);
         let team = self.actors[c].team;
         let td = self.team_dir(team);
@@ -2217,6 +2255,9 @@ impl Play {
         let by = if tackler.is_empty() { String::new() } else { format!(" Tackled by {}.", tackler) };
         if sack {
             return format!("{} sacked by {} for a loss of {}.", who, tackler, -yards);
+        }
+        if self.fumble_lost {
+            return format!("FUMBLE! Recovered by {}.{}", who, by);
         }
         if self.actors[c].team != self.off_team {
             return format!("{} pass INTERCEPTED by {}!{}", self.thrower_name, who, by);
@@ -2288,6 +2329,7 @@ impl Play {
             sack: false,
             text,
             flags: self.flags.clone(),
+            fumble: self.fumble_lost,
             fg: self.special.as_ref().and_then(|sp| sp.fg_result),
             kick_oob: self.special.as_ref().map(|sp| sp.kick_oob).unwrap_or(false),
         };
@@ -2310,6 +2352,14 @@ impl Play {
             if a.anim == Anim::Celebrate {
                 continue;
             }
+            if a.ragdoll {
+                a.anim = Anim::Ragdoll;
+                continue;
+            }
+            if a.wrapping {
+                a.anim = Anim::Wrap;
+                continue;
+            }
             if !a.upright() {
                 a.anim = if a.mv == Move::Dive { Anim::Dive } else { Anim::Down };
                 continue;
@@ -2319,8 +2369,12 @@ impl Play {
                 Move::Juke => Anim::Juke,
                 Move::Spin => Anim::Spin,
                 Move::Stiff => Anim::Stiff,
+                Move::Hurdle => Anim::Hurdle,
+                Move::Truck => Anim::Truck,
                 Move::None => {
-                    if a.engaged.is_some() {
+                    if a.stagger > 0.0 && a.v.len() > 0.5 {
+                        Anim::Stagger
+                    } else if a.engaged.is_some() {
                         Anim::Block
                     } else if a.anim == Anim::Throw && self.t < 10.0 && matches!(self.ball, Ball::Air { t, .. } if t < 0.35) {
                         Anim::Throw

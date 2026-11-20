@@ -4,9 +4,11 @@
 //! same rules, AI and (later) franchise logic run in the browser (via `sf-wasm`) and
 //! on the native PC client (Bevy).
 
+pub mod contact;
 pub mod events;
 pub mod game;
 pub mod math;
+pub mod physics;
 pub mod player;
 pub mod playbook;
 pub mod rng;

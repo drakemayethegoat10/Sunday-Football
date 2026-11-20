@@ -17,6 +17,12 @@ pub enum Event {
     Incomplete,
     Tackle { big: bool },
     BrokenTackle,
+    /// A defender wrapped up the ball carrier (contact).
+    Wrap,
+    BigHit,
+    Truck,
+    Hurdle,
+    Fumble,
     Juke,
     Spin,
     StiffArm,
