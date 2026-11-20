@@ -53,6 +53,8 @@ fn run(seed: u64, off_call: usize, throw_at: f32, throw_to: u8, kind: u8, wiggle
                 input.spin = steps % 57 == 0;
                 input.stiff = steps % 71 == 0;
                 input.switch = steps % 97 == 0;
+                input.hurdle = steps % 83 == 0;
+                input.truck = steps % 89 == 0;
             }
             _ => {}
         }

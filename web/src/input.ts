@@ -1,6 +1,6 @@
 // Keyboard + mouse/touchpad input, merged with the gamepad by main.ts.
 
-export const BTN = { Sprint: 1, Action: 2, Spin: 4, Stiff: 8, Switch: 16, FairCatch: 32 } as const;
+export const BTN = { Sprint: 1, Action: 2, Spin: 4, Stiff: 8, Switch: 16, FairCatch: 32, Hurdle: 64, Truck: 128 } as const;
 
 export interface FrameInput {
   ix: number;
@@ -47,6 +47,8 @@ export class Input {
         case 'KeyE': this.edges |= BTN.Stiff; break;
         case 'Tab': this.edges |= BTN.Switch; break;
         case 'KeyF': this.edges |= BTN.FairCatch; break;
+        case 'KeyC': this.edges |= BTN.Hurdle; break;
+        case 'KeyR': this.edges |= BTN.Truck; break;
       }
       const m = /^Digit([1-5])$/.exec(e.code) ?? /^Numpad([1-5])$/.exec(e.code);
       if (m) this.beginHold(Number(m[1]));

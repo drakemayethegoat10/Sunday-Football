@@ -2,7 +2,7 @@
 // squads, the ball, grounded shadows and the user/receiver markers.
 
 import * as THREE from 'three';
-import { ANIM, FIELD_W, FLAG, LineupEntry, N, STRIDE, TeamInfo } from '../types';
+import { ANIM, FIELD_W, FLAG, LineupEntry, N, RAGDOLL_STRIDE, STRIDE, TeamInfo } from '../types';
 import {
   BONE,
   HIPS_REST_Y,
@@ -121,16 +121,25 @@ function bodyMaterial(u: UniformColors, number: number, skin: number): THREE.Mes
 
 type Pose = {
   hipsY: number; leanZ: number; leanX: number; bodyX: number; twist: number; headZ: number;
-  legL: number; legR: number; kneeL: number; kneeR: number;
+  legL: number; legR: number; kneeL: number; kneeR: number; legLx: number; legRx: number;
   armL: number; armR: number; armLx: number; armRx: number; elbL: number; elbR: number;
 };
 
 /** Default: an athletic ready stance with bent knees. */
 const REST: Pose = {
   hipsY: 0.97, leanZ: -0.08, leanX: 0, bodyX: 0, twist: 0, headZ: 0,
-  legL: 0.12, legR: 0.05, kneeL: -0.28, kneeR: -0.22,
+  legL: 0.12, legR: 0.05, kneeL: -0.28, kneeR: -0.22, legLx: 0, legRx: 0,
   armL: 0.1, armR: 0.1, armLx: -0.2, armRx: 0.2, elbL: 0.45, elbR: 0.45,
 };
+
+// Core (z-up) -> three.js (y-up) rotation: q3 = C * q * C^-1, C = -90° about X.
+const Q_C = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
+const Q_CI = Q_C.clone().invert();
+const tmpQ = Array.from({ length: 11 }, () => new THREE.Quaternion());
+const tmpInv = new THREE.Quaternion();
+const tmpV = new THREE.Vector3();
+/** Ragdoll part order from the core (see physics.rs). */
+const RP = { Pelvis: 0, Torso: 1, Head: 2, UpperArmL: 3, ForeArmL: 4, UpperArmR: 5, ForeArmR: 6, ThighL: 7, ShinL: 8, ThighR: 9, ShinR: 10 };
 
 class Rig {
   root = new THREE.Group();
@@ -142,6 +151,10 @@ class Rig {
   facing = 0;
   downSide = 1;
   build = 1;
+  number = 0;
+  ragdolled = false;
+  private lastAnim = -1;
+  private animT = 0;
 
   constructor(helmetGeo: THREE.BufferGeometry) {
     const { bones, skeleton } = makeSkeleton();
@@ -160,13 +173,21 @@ class Rig {
     this.body.material = bodyMaterial(u, e.number, e.skin);
     this.helmet.geometry = helmetGeo;
     this.build = e.build;
+    this.number = e.number;
+    this.ragdolled = false;
     const sx = [0.93, 1.0, 1.13][e.build] ?? 1;
     const sz = [0.9, 1.0, 1.2][e.build] ?? 1;
     this.bones[BONE.root].scale.set(sx, 1, sz);
     this.downSide = e.number % 2 ? 1 : -1;
   }
 
-  animate(dt: number, anim: number, speed: number, carrier: boolean, time: number, lateral: number) {
+  animate(dt: number, anim: number, speed: number, carrier: boolean, time: number, lateral: number, forward: number) {
+    this.ragdolled = false;
+    if (anim !== this.lastAnim) {
+      this.lastAnim = anim;
+      this.animT = 0;
+    }
+    this.animT += dt;
     const a = Math.min(1, Math.max(0.15, speed / 8.5));
     this.phase += dt * (2.2 + speed * 1.55);
     const s = Math.sin(this.phase);
@@ -205,6 +226,14 @@ class Rig {
       case ANIM.Juke:
       case ANIM.Spin:
         run(a);
+        if (anim === ANIM.Run && speed > 1.2 && forward < -0.35 * speed) {
+          // Backpedal: upright, short choppy steps, arms ready.
+          Object.assign(t, { leanZ: 0.05, legL: -s * 0.55 * a, legR: s * 0.55 * a, armL: 0.5, armR: 0.5, elbL: 1.4, elbR: 1.4, hipsY: 0.93 });
+        } else if (anim === ANIM.Run && speed > 1.2 && Math.abs(lateral) > 0.75 * speed) {
+          // Side shuffle: legs open and close, hips low.
+          const w = Math.abs(s) * 0.38;
+          Object.assign(t, { leanZ: -0.15, legL: 0.15, legR: 0.15, legLx: -w, legRx: w, kneeL: -0.5, kneeR: -0.5, hipsY: 0.9, armL: 0.45, armR: 0.45, elbL: 1.0, elbR: 1.0 });
+        }
         // Core "left" is three.js -Z, which is a negative roll about X.
         if (anim === ANIM.Juke) t.leanX = -Math.sign(lateral || 1) * 0.45;
         if (anim === ANIM.Spin) Object.assign(t, { armL: 0.4, armR: 0.4, elbL: 2.0, elbR: 2.0 });
@@ -214,9 +243,15 @@ class Rig {
         this.phase += dt * 6;
         Object.assign(t, { leanZ: -0.55, hipsY: 0.86, armL: 1.45, armR: 1.45, elbL: 0.35, elbR: 0.35, armLx: 0.12, armRx: -0.12, headZ: 0.4 });
         break;
-      case ANIM.Throw:
-        Object.assign(t, { armR: 2.9, elbR: 0.35, armL: 1.0, elbL: 0.8, leanZ: -0.05, legL: 0.35, legR: -0.25, twist: -0.45 });
+      case ANIM.Throw: {
+        // Release then follow-through: the arm whips over the top and comes down across.
+        const k = Math.min(1, this.animT / 0.35);
+        Object.assign(t, {
+          armR: 2.9 - k * 1.6, elbR: 0.35 + k * 0.4, armL: 1.0 - k * 0.6, elbL: 0.8,
+          leanZ: -0.05 - k * 0.35, legL: 0.35, legR: -0.25 - k * 0.2, twist: -0.45 + k * 0.7,
+        });
         break;
+      }
       case ANIM.Catch:
         run(a * 0.6);
         Object.assign(t, { armL: 2.3, armR: 2.3, elbL: 0.5, elbR: 0.5, armLx: 0.25, armRx: -0.25, headZ: -0.2 });
@@ -236,12 +271,45 @@ class Rig {
         break;
       case ANIM.Celebrate: {
         const j = Math.abs(Math.sin(time * 7 + this.phase));
-        Object.assign(t, { hipsY: 1.0 + j * 0.25, armL: 3.0, armR: 3.0, armLx: -0.35, armRx: 0.35, elbL: 0.2, elbR: 0.2, legL: j * 0.3, legR: -j * 0.2, kneeL: -j * 0.6, kneeR: -j * 0.5, headZ: -0.3 });
+        switch (this.number % 4) {
+          case 0: // jump, both arms up
+            Object.assign(t, { hipsY: 1.0 + j * 0.25, armL: 3.0, armR: 3.0, armLx: -0.35, armRx: 0.35, elbL: 0.2, elbR: 0.2, legL: j * 0.3, legR: -j * 0.2, kneeL: -j * 0.6, kneeR: -j * 0.5, headZ: -0.3 });
+            break;
+          case 1: // point to the sky
+            Object.assign(t, { armL: 3.1, elbL: 0.0, armR: 0.3, elbR: 1.6, headZ: -0.5, hipsY: 0.98 + j * 0.05 });
+            break;
+          case 2: // flex
+            Object.assign(t, { armL: 0.2, armR: 0.2, armLx: -1.5, armRx: 1.5, elbL: 2.3, elbR: 2.3, leanZ: 0.08, hipsY: 0.95 + j * 0.06 });
+            break;
+          default: { // high-knee dance
+            const h = Math.sin(time * 9 + this.phase);
+            Object.assign(t, { legL: Math.max(0, h) * 1.4, kneeL: -Math.max(0, h) * 1.8, legR: Math.max(0, -h) * 1.4, kneeR: -Math.max(0, -h) * 1.8, armL: 1.2 + h * 0.6, armR: 1.2 - h * 0.6, elbL: 1.2, elbR: 1.2, hipsY: 1.0 });
+          }
+        }
         break;
       }
+      case ANIM.Wrap:
+        // Wrapped up on the ball carrier: arms around him, driving the legs.
+        run(0.4);
+        Object.assign(t, { leanZ: -0.75, hipsY: 0.84, armL: 1.55, armR: 1.55, armLx: 0.55, armRx: -0.55, elbL: 1.1, elbR: 1.1, headZ: 0.5 });
+        break;
+      case ANIM.Hurdle:
+        Object.assign(t, { legL: 1.45, kneeL: -2.1, legR: -0.5, kneeR: -0.7, armL: 1.3, armR: 0.8, elbL: 0.5, elbR: 1.8, leanZ: -0.3, hipsY: 1.0 });
+        break;
+      case ANIM.Truck:
+        run(a);
+        Object.assign(t, { leanZ: -0.8, leanX: 0.2, hipsY: 0.86, armL: 0.7, elbL: 1.9, armLx: -0.1, headZ: 0.6 });
+        break;
+      case ANIM.Stagger:
+        run(a * 0.7);
+        t.leanX = Math.sin(time * 13 + this.phase) * 0.28;
+        t.leanZ = -0.42;
+        t.armL = 1.6;
+        t.armLx = -0.9;
+        break;
     }
 
-    if (carrier && anim !== ANIM.Down && anim !== ANIM.Throw && anim !== ANIM.Stiff && anim !== ANIM.Celebrate) {
+    if (carrier && anim !== ANIM.Down && anim !== ANIM.Throw && anim !== ANIM.Stiff && anim !== ANIM.Celebrate && anim !== ANIM.Hurdle) {
       t.armR = 0.7;
       t.elbR = 2.0;
       t.armRx = -0.2;
@@ -257,14 +325,50 @@ class Rig {
     B[BONE.hips].position.y = HIPS_REST_Y + (p.hipsY - 1.0);
     B[BONE.spine].rotation.set(0, p.twist, 0);
     B[BONE.head].rotation.set(0, 0, p.headZ);
-    B[BONE.thL].rotation.z = p.legL;
-    B[BONE.thR].rotation.z = p.legR;
+    B[BONE.hips].rotation.set(0, 0, 0);
+    B[BONE.hips].position.set(0, HIPS_REST_Y + (p.hipsY - 1.0), 0);
+    B[BONE.thL].rotation.set(p.legLx, 0, p.legL);
+    B[BONE.thR].rotation.set(p.legRx, 0, p.legR);
     B[BONE.knL].rotation.z = p.kneeL;
     B[BONE.knR].rotation.z = p.kneeR;
     B[BONE.shL].rotation.set(p.armLx, 0, p.armL);
     B[BONE.shR].rotation.set(p.armRx, 0, p.armR);
     B[BONE.elL].rotation.z = p.elbL;
     B[BONE.elR].rotation.z = p.elbR;
+  }
+
+  /** Pose the skeleton straight from the physics ragdoll (parts in core coordinates). */
+  applyRagdoll(buf: Float32Array, o: number) {
+    this.ragdolled = true;
+    this.lastAnim = ANIM.Ragdoll;
+    for (let k = 0; k < 11; k++) {
+      const b = o + 1 + k * 7;
+      tmpQ[k].set(buf[b + 3], buf[b + 4], buf[b + 5], buf[b + 6]).premultiply(Q_C).multiply(Q_CI);
+    }
+    const pb = o + 1 + RP.Pelvis * 7;
+    const B = this.bones;
+    const qp = tmpQ[RP.Pelvis];
+    // Root so that the hips bone sits exactly on the pelvis body.
+    tmpV.set(0, HIPS_REST_Y, 0).applyQuaternion(qp);
+    B[BONE.root].quaternion.copy(qp);
+    B[BONE.root].position.set(buf[pb] - tmpV.x, buf[pb + 2] - tmpV.y, -buf[pb + 1] - tmpV.z);
+    B[BONE.hips].quaternion.identity();
+    B[BONE.hips].position.set(0, HIPS_REST_Y, 0);
+    const local = (bone: number, parent: THREE.Quaternion, child: THREE.Quaternion) => {
+      tmpInv.copy(parent).invert();
+      B[bone].quaternion.copy(tmpInv.multiply(child));
+    };
+    // The skeleton's "L" bones sit on three.js +Z, which is the ragdoll's right side.
+    local(BONE.spine, qp, tmpQ[RP.Torso]);
+    local(BONE.head, tmpQ[RP.Torso], tmpQ[RP.Head]);
+    local(BONE.shL, tmpQ[RP.Torso], tmpQ[RP.UpperArmR]);
+    local(BONE.elL, tmpQ[RP.UpperArmR], tmpQ[RP.ForeArmR]);
+    local(BONE.shR, tmpQ[RP.Torso], tmpQ[RP.UpperArmL]);
+    local(BONE.elR, tmpQ[RP.UpperArmL], tmpQ[RP.ForeArmL]);
+    local(BONE.thL, qp, tmpQ[RP.ThighR]);
+    local(BONE.knL, tmpQ[RP.ThighR], tmpQ[RP.ShinR]);
+    local(BONE.thR, qp, tmpQ[RP.ThighL]);
+    local(BONE.knR, tmpQ[RP.ThighL], tmpQ[RP.ShinL]);
   }
 }
 
@@ -415,9 +519,12 @@ export class Players {
     });
   }
 
-  update(prev: Float32Array, cur: Float32Array, alpha: number, dt: number, time: number) {
+  update(prev: Float32Array, cur: Float32Array, alpha: number, dt: number, time: number, rag?: Float32Array) {
     this.userIndex = -1;
     const d = this.dummy;
+    // Which actors are ragdolls this frame (actor index -> buffer offset).
+    const ragAt = new Map<number, number>();
+    if (rag) for (let o = 0; o + RAGDOLL_STRIDE <= rag.length; o += RAGDOLL_STRIDE) ragAt.set(rag[o], o);
     for (let i = 0; i < N; i++) {
       const o = i * STRIDE;
       const x = prev[o] + (cur[o] - prev[o]) * alpha;
@@ -429,13 +536,22 @@ export class Players {
       const flags = cur[o + 6];
       const icon = cur[o + 7];
       const rig = this.rigs[i];
-      rig.root.position.set(x, z, -y);
-      rig.facing = lerpAngle(rig.facing, facing, 1 - Math.exp(-dt * 20));
-      rig.root.rotation.y = rig.facing;
-      const vx = cur[o] - prev[o];
-      const vy = cur[o + 1] - prev[o + 1];
-      const lateral = -Math.sin(facing) * vx + Math.cos(facing) * vy;
-      rig.animate(dt, anim, speed, (flags & FLAG.Carrier) !== 0, time, lateral);
+      const ro = ragAt.get(i);
+      if (ro !== undefined && rag) {
+        rig.root.position.set(0, 0, 0);
+        rig.root.rotation.set(0, 0, 0);
+        rig.applyRagdoll(rag, ro);
+      } else {
+        rig.root.position.set(x, z, -y);
+        rig.facing = lerpAngle(rig.facing, facing, 1 - Math.exp(-dt * 20));
+        rig.root.rotation.y = rig.facing;
+        // Velocity relative to facing (per sim step -> yards/second).
+        const vx = (cur[o] - prev[o]) * 60;
+        const vy = (cur[o + 1] - prev[o + 1]) * 60;
+        const lateral = -Math.sin(facing) * vx + Math.cos(facing) * vy;
+        const forward = Math.cos(facing) * vx + Math.sin(facing) * vy;
+        rig.animate(dt, anim, speed, (flags & FLAG.Carrier) !== 0, time, lateral, forward);
+      }
 
       // AO blob centered on the body (longer when lying down).
       const down = anim === ANIM.Down || anim === ANIM.Dive;

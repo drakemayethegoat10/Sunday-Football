@@ -12,11 +12,14 @@ pub const BTN_SPIN: u32 = 4;
 pub const BTN_STIFF: u32 = 8;
 pub const BTN_SWITCH: u32 = 16;
 pub const BTN_FAIR_CATCH: u32 = 32;
+pub const BTN_HURDLE: u32 = 64;
+pub const BTN_TRUCK: u32 = 128;
 
 #[wasm_bindgen]
 pub struct WebGame {
     game: Game,
     snap: Vec<f32>,
+    rag: Vec<f32>,
 }
 
 #[wasm_bindgen]
@@ -34,7 +37,7 @@ impl WebGame {
             penalties: penalties.clamp(0.0, 3.0),
             overtime,
         };
-        WebGame { game: Game::new(seed as u64, settings, [home, away], [1.0, 0.0]), snap: Vec::with_capacity(256) }
+        WebGame { game: Game::new(seed as u64, settings, [home, away], [1.0, 0.0]), snap: Vec::with_capacity(256), rag: Vec::with_capacity(512) }
     }
 
     /// Advance one fixed step. `mx`/`my` are the move direction in field space.
@@ -50,6 +53,8 @@ impl WebGame {
             throw_to,
             throw_kind,
             fair_catch: buttons & BTN_FAIR_CATCH != 0,
+            hurdle: buttons & BTN_HURDLE != 0,
+            truck: buttons & BTN_TRUCK != 0,
         };
         self.game.step(dt, &input);
     }
@@ -58,6 +63,12 @@ impl WebGame {
     pub fn snapshot(&mut self) -> Vec<f32> {
         self.game.snapshot(&mut self.snap);
         self.snap.clone()
+    }
+
+    /// Ragdoll bodies: per ragdoll, actor index then 11 × (x, y, z, qx, qy, qz, qw).
+    pub fn ragdolls(&mut self) -> Vec<f32> {
+        self.game.ragdolls(&mut self.rag);
+        self.rag.clone()
     }
 
     pub fn hud(&self) -> String {

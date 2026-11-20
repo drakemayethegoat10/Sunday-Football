@@ -7,3 +7,4 @@ license.workspace = true
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
+rapier3d = { version = "0.36", default-features = false, features = ["dim3", "f32", "std", "enhanced-determinism"] }

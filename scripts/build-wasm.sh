@@ -4,8 +4,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-PROFILE=release
-FLAG=--release
+PROFILE=wasm-release
+FLAG="--profile wasm-release"
 if [[ "${1:-}" == "--dev" ]]; then PROFILE=debug; FLAG=; fi
 
 # The wasm-bindgen CLI must match the crate version in Cargo.lock exactly.
