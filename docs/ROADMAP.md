@@ -27,7 +27,7 @@ Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibiti
 - [x] Quality presets with auto-detection
 - Known for M2: kick returns average about 13 yards (low); scoring runs a bit low in short games.
 
-## M2 — Feel ✅ *(current)*
+## M2 — Feel ✅
 - [x] Physics tackling: momentum/angle contact model (big hits, wrap-ups that drain the
       carrier's balance while he drives for yards, broken tackles, gang tackles), then real
       ragdolls (Rapier, 11 bodies per player, grab joints between tacklers and carrier)
@@ -45,6 +45,23 @@ Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibiti
 - [x] Camera: lookahead, hit shake, pull-back on kicks and deep balls
 - [x] Kick returns fixed (return team blocks the coverage); scoring back to realistic levels
 - Known: CPU rushing varies a lot game to game (about 3 yards per carry on average).
+
+## Polish before M3 ✅ *(current)*
+- [x] Puck engine: every player is a physical circle; collisions trade momentum, blocking
+      is a push-and-leverage fight between circles, tackle reach is measured from their
+      edges, jukes are acceleration bursts, and bodies lean with their circle
+- [x] Pass rush fixed: a quarterback who just holds the ball now gets about 3.5–4 s
+      before pressure (it was about 1.4 s); quick sacks only come from unblocked blitzers.
+      Linemen kick-slide to cut off rushers; CPU quarterbacks feel pressure and throw
+      it away
+- [x] New kick meter: aim arrow on the field, arc power meter with the landing ring
+      moving out as power fills, then stop the marker in the sweet spot
+- [x] Pass target marker (gold) and kick landing marker (cyan) with a dotted flight path
+- [x] Ball carried high and tight in the carrying arm; QB holds it at the chest in the pocket
+- [x] "Player circles" option in the pause menu to see the engine
+- Pocket report: `cargo test -p sf-core --release --test pocket -- --ignored --nocapture`
+- Known: CPU rushing is low (about 2.5 yards per carry) and CPU passing a bit high
+  (about 8.5 yards per attempt); next tuning pass.
 
 ## M3 — League data
 - 32 teams (after TEAMS.md is approved), Sarasota branding from the owner

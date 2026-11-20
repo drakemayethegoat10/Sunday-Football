@@ -62,3 +62,31 @@ fn coverage_report() {
     for (k, v) in &by_off { println!("{:<16} {:>4} {:>6.1} {:>6.1} {:>6.1}", k, v.0, v.1 / v.0 as f32, v.2 / v.0 as f32, v.3 / v.0 as f32); }
     println!("throws {} sacks {} avg time to throw {:.2}s", pressure.0, pressure.1, pressure.2 / pressure.0.max(1) as f32);
 }
+
+/// League-wide averages from full CPU-vs-CPU games.
+#[test]
+#[ignore]
+fn game_report() {
+    let input = Input::default();
+    let (mut pts, mut ra, mut ry, mut pa, mut cmp, mut py, mut sk, mut ints, mut fl, mut kr, mut kry, mut games) =
+        (0u32, 0u32, 0f32, 0u32, 0u32, 0f32, 0u32, 0u32, 0u32, 0u32, 0f32, 0u32);
+    for seed in 1..=36 {
+        let s = Settings { quarter_len: 300.0, runoff: 15.0, user_team: None, ..Default::default() };
+        let mut g = Game::new(seed, s, ["SAR", "HOU"], [1.0, 0.0]);
+        while g.phase != Phase::Final {
+            g.step(1.0 / 60.0, &input);
+            g.drain_events();
+        }
+        games += 2;
+        pts += g.score[0] as u32 + g.score[1] as u32;
+        for t in &g.stats {
+            ra += t.rush_att; ry += t.rush_yds; pa += t.pass_att; cmp += t.comp; py += t.pass_yds;
+            sk += t.sacks; ints += t.ints; fl += t.fumbles_lost; kr += t.kr; kry += t.kr_yds;
+        }
+    }
+    let n = games as f32;
+    println!("points/team {:.1}", pts as f32 / n);
+    println!("rush {:.1} att/team, {:.2} ypc", ra as f32 / n, ry / ra.max(1) as f32);
+    println!("pass {:.1} att/team, {:.0}% comp, {:.2} ypa, {:.1} sacks/team, {:.2} int/team", pa as f32 / n, cmp as f32 * 100.0 / pa.max(1) as f32, py / pa.max(1) as f32, sk as f32 / n, ints as f32 / n);
+    println!("fumbles lost/team {:.2}, kick return avg {:.1}", fl as f32 / n, kry / kr.max(1) as f32);
+}

@@ -98,7 +98,7 @@ impl Play {
         let in_pocket = c == QB && self.qb_in_pocket();
         let gang = (0..N).filter(|&j| {
             let o = &self.actors[j];
-            o.team != ca.team && o.upright() && o.p.dist(ca.p) < 1.6
+            o.team != ca.team && o.upright() && self.gap(j, c) < 0.9
         }).count();
 
         for j in 0..N {
@@ -111,8 +111,9 @@ impl Play {
                 if !o.upright() && !diving {
                     continue;
                 }
-                let range = if diving { 1.6 } else { 0.95 };
-                if o.p.dist(ca.p) > range {
+                // Reach is measured from the edges of the two pucks.
+                let reach = if diving { 0.9 } else { crate::puck::REACH };
+                if self.gap(j, c) > reach {
                     continue;
                 }
             }
@@ -147,7 +148,8 @@ impl Play {
                 p += 0.08;
             }
             if o.engaged.is_some() {
-                p -= 0.35;
+                // Still fighting a block: only an arm tackle.
+                p -= 0.45;
             }
             if diving {
                 p += 0.1;
@@ -254,7 +256,7 @@ impl Play {
             self.actors[c].stagger = 0.4;
         }
         let pocket = if c == QB && self.qb_in_pocket() { 1.8 } else { 1.0 };
-        self.balance -= dt * 2.2 * tf_sum / cf * pocket;
+        self.balance -= dt * 1.6 * tf_sum / cf * pocket;
         // Wrapped defenders ride along.
         let cp = self.actors[c].p;
         let cv = self.actors[c].v;
@@ -290,7 +292,7 @@ impl Play {
             if participants.len() >= 3 {
                 break;
             }
-            if o.team != ca.team && o.upright() && !participants.contains(&j) && o.p.dist(ca.p) < 1.3 && rng.chance(0.5) {
+            if o.team != ca.team && o.upright() && !participants.contains(&j) && self.gap(j, c) < 0.6 && rng.chance(0.5) {
                 participants.push(j);
             }
         }
@@ -457,37 +459,6 @@ impl Play {
         self.set_react_all(team);
     }
 
-    // -----------------------------------------------------------------------
-    // Pass rush moves
-    // -----------------------------------------------------------------------
-
-    /// Try a rush move by defender `d` against blocker `b`. Returns true if he sheds the block.
-    pub(crate) fn rush_move(&mut self, d: usize, b: usize, mv: RushMove, rng: &mut Rng) -> bool {
-        let (dr, br) = (self.actors[d].r, self.actors[b].r);
-        let p = match mv {
-            RushMove::Swim => 0.3 + (dr.agility as f32 + dr.pass_rush as f32 - br.block as f32 - br.agility as f32) / 250.0,
-            RushMove::Spin => 0.25 + (dr.agility as f32 - br.block as f32) / 220.0,
-            RushMove::Bull => 0.15 + (dr.strength as f32 - br.strength as f32) / 200.0,
-        };
-        self.actors[d].rush_cd = 1.1;
-        if mv == RushMove::Bull {
-            // Drive the blocker back toward the quarterback.
-            let goal = self.actors[QB].p;
-            let dir = (goal - self.actors[d].p).norm();
-            self.actors[b].p += dir * 0.35;
-            self.actors[d].p += dir * 0.35;
-        }
-        if rng.chance(clamp(p, 0.05, 0.75)) {
-            self.actors[b].engaged = None;
-            self.actors[d].engaged = None;
-            self.actors[b].stun = 0.5;
-            let goal = self.actors[QB].p;
-            self.actors[d].v = (goal - self.actors[d].p).norm() * 3.0;
-            return true;
-        }
-        false
-    }
-
     /// Returners' blockers go find a cover man while the kick is in the air.
     pub(crate) fn return_block_desire(&self, i: usize, home: V2) -> V2 {
         let a = &self.actors[i];
@@ -502,10 +473,7 @@ impl Play {
             .filter(|&(_, d)| d < 10.0)
             .min_by(|x, y| x.1.partial_cmp(&y.1).unwrap());
         match threat {
-            Some((j, _)) => {
-                let o = self.actors[j].p;
-                seek(a.p, o + (land - o).norm() * 0.8, a.top)
-            }
+            Some((j, _)) => seek(a.p, self.intercept_point(i, j, land), a.top),
             None => arrive(a.p, home, a.top * 0.9),
         }
     }

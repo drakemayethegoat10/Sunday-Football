@@ -321,12 +321,13 @@ export class UI {
 
   // ---------------------------------------------------------------- pause / final
 
-  showPause(show: boolean, labels: { camera: string; quality: string; mute: string }, onAct?: (act: string) => void) {
+  showPause(show: boolean, labels: { camera: string; quality: string; mute: string; circles: string }, onAct?: (act: string) => void) {
     this.pauseOpen = show;
     $('#pause').hidden = !show;
     $('#cam-name').textContent = labels.camera;
     $('#q-name').textContent = labels.quality;
     $('#mute-name').textContent = labels.mute;
+    $('#circles-name').textContent = labels.circles;
     if (onAct) {
       document.querySelectorAll<HTMLButtonElement>('#pause [data-act]').forEach((b) => (b.onclick = () => onAct(b.dataset.act!)));
     }

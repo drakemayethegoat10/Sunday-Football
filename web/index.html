@@ -101,8 +101,8 @@
         <div id="hint"></div>
         <div id="throw-meter"><div></div></div>
         <div id="kick-meter" hidden>
-          <div class="km-title">KICK</div>
-          <div class="km-bar"><div class="km-fill"></div><div class="km-sweet"></div><div class="km-needle"></div></div>
+          <div class="km-head"><span class="km-title">KICK</span><span class="km-info"></span></div>
+          <canvas width="300" height="168"></canvas>
           <div class="km-label"></div>
         </div>
         <div id="lower-third">
@@ -139,6 +139,7 @@
             <button data-act="camera" class="mid-btn">CAMERA: <span id="cam-name"></span></button>
             <button data-act="quality" class="mid-btn">GRAPHICS: <span id="q-name"></span></button>
             <button data-act="mute" class="mid-btn">SOUND: <span id="mute-name"></span></button>
+            <button data-act="circles" class="mid-btn" title="Show the circle under each player that the engine moves, blocks and tackles with">PLAYER CIRCLES: <span id="circles-name"></span></button>
             <button data-act="quit" class="mid-btn">QUIT TO TITLE</button>
           </div>
           <div class="controls">
@@ -155,7 +156,8 @@
               <tr><td>Instant replay</td><td><kbd>R</kbd> (play call)</td><td><kbd>X</kbd> (play call)</td></tr>
               <tr><td>Throw (tap bullet, hold lob)</td><td><kbd>1</kbd>–<kbd>5</kbd> or click</td><td><kbd>A</kbd><kbd>B</kbd><kbd>X</kbd><kbd>Y</kbd><kbd>RB</kbd></td></tr>
               <tr><td>Switch defender</td><td><kbd>Tab</kbd></td><td><kbd>B</kbd></td></tr>
-              <tr><td>Kick meter</td><td><kbd>Space</kbd> ×3</td><td><kbd>A</kbd> ×3</td></tr>
+              <tr><td>Aim a kick</td><td><kbd>A</kbd> <kbd>D</kbd> / arrows</td><td>Left stick</td></tr>
+              <tr><td>Kick: start, power, sweet spot</td><td><kbd>Space</kbd> ×3</td><td><kbd>A</kbd> ×3</td></tr>
               <tr><td>Fair catch</td><td><kbd>F</kbd></td><td><kbd>Y</kbd></td></tr>
               <tr><td>Timeout</td><td><kbd>T</kbd></td><td><kbd>Y</kbd> (play call)</td></tr>
               <tr><td>Camera · zoom</td><td><kbd>V</kbd> · <kbd>-</kbd> <kbd>=</kbd></td><td><kbd>View</kbd></td></tr>

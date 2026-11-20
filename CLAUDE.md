@@ -6,8 +6,9 @@ and `docs/ROADMAP.md` (milestones) before starting work.
 ## Layout
 - `crates/sf-core`: all game logic in pure Rust (rules, on-field sim, AI, later franchise).
   No graphics or platform code: it must stay shareable with the future Bevy PC client.
-  Key modules: `sim` (a play), `special` (kicks), `contact` (tackling model, fumbles,
-  rush moves), `physics` (Rapier ragdolls, deterministic), `game` (clock, rules, CPU calls).
+  Key modules: `sim` (a play), `puck` (players as circles: collisions, blocking, rush
+  moves), `special` (kicks), `contact` (tackling model, fumbles), `physics` (Rapier
+  ragdolls, deterministic), `game` (clock, rules, CPU calls).
 - `crates/sf-wasm`: thin wasm-bindgen wrapper (`WebGame`). Keep logic out of it.
 - `web/`: Vite + TypeScript + Three.js client (render, input, UI, audio). `web/src/wasm/` is generated.
 - `data/teams.json`: fictional league identity (names/colors), shared by both clients.
@@ -15,6 +16,7 @@ and `docs/ROADMAP.md` (milestones) before starting work.
 ## Commands
 - Core tests: `cargo test -p sf-core --release`
 - Tuning report: `cargo test -p sf-core --release --test tuning -- --ignored --nocapture`
+  (`game_report` for league averages); pocket timing: `--test pocket -- --ignored --nocapture`
 - Build WebAssembly: `scripts/build-wasm.sh` (wasm-bindgen CLI must match Cargo.lock;
   uses the size-optimized `wasm-release` profile)
 - Web dev server: `cd web && npm run dev` (rebuilds wasm first) or `npm run serve`

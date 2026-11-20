@@ -46,8 +46,16 @@ docs/           This file, ROADMAP.md, TEAMS.md.
 
 ## 3. On-field gameplay pillars
 
-1. **Smooth, weighty movement.** Acceleration, top speed, cutting and momentum come from
-   ratings, so stars feel like stars.
+1. **The puck engine: smooth, weighty movement.** Every player's true body is a circle
+   on the turf (a puck with a radius, mass, position and velocity). Movement, collisions,
+   blocking and tackle reach all run on the pucks; the animated body is drawn on top and
+   leans with its puck's acceleration. Animation never moves a player, so momentum is
+   always kept. Opponents bump and trade momentum; teammates slide past each other.
+   Blocking is a push-and-leverage fight between two pucks: a pass rusher has to
+   physically get his circle past the blocker's shoulder (swim, spin and bull rush are
+   bursts of lateral speed or drive), and blocks wear down after a couple of seconds.
+   Acceleration, top speed, cutting and momentum come from ratings, so stars feel like
+   stars. The pause menu's "Player circles" option shows every puck.
 2. **Physics-based tackling, like Backbreaker.** A contact model in the core turns
    momentum, hit angle and ratings into big hits, wrap-ups (the carrier keeps driving
    while his balance drains), broken tackles and gang tackles. Completed tackles become
@@ -60,6 +68,8 @@ docs/           This file, ROADMAP.md, TEAMS.md.
    defender, and lofts it over underneath coverage. Ratings, pressure and throwing on the
    run add error.
    Throw types: **tap = bullet**, **short hold = touch**, **long hold = lob** **(default)**.
+   Once the ball is in the air, a gold marker on the turf shows where it's coming down,
+   with a dotted line along its flight (kicks get a cyan one).
 4. **Ball-carrier moves.** Juke, spin and stiff arm at first; hurdle, truck and
    cut-backs come later.
 5. **Adjustable camera.** The default is a broadcast camera behind the offense. The
@@ -84,7 +94,8 @@ skill area, fatigue. Quarter length defaults to 5 minutes with an accelerated cl
 | Instant replay | R (play call) | X (play call) |
 | Throw to receiver | 1–5 or **click the receiver** (tap = bullet, hold = lob) | A B X Y RB (tap / hold) |
 | Switch defender | Tab | B |
-| Kick meter | Space ×3 (start, power, accuracy) | A ×3 |
+| Aim a kick (arrow on the field) | A / D or arrows | Left stick |
+| Kick meter: start, power, then stop it in the sweet spot | Space ×3 | A ×3 |
 | Fair catch | F | Y |
 | Timeout | T | Y (in the play-call menu) |
 | Play-call tabs | Q / E | LB / RB |

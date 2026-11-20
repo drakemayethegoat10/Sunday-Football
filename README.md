@@ -24,7 +24,8 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the design and [docs/ROADMAP.md](docs/R
 | Instant replay | R in the play-call menu | X in the play-call menu |
 | Throw | 1–5 or click a receiver (tap = bullet, hold = lob) | A B X Y RB |
 | Switch defender | Tab | B |
-| Kick meter | Space ×3 | A ×3 |
+| Aim a kick | A / D or arrows | Left stick |
+| Kick meter (start, power, sweet spot) | Space ×3 | A ×3 |
 | Fair catch · timeout | F · T | Y |
 | Camera · zoom | V · `-` `=` | View |
 | Pause / controls | Esc | Menu |
