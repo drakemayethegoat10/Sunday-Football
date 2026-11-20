@@ -11,6 +11,7 @@ pub mod math;
 pub mod physics;
 pub mod player;
 pub mod playbook;
+pub mod puck;
 pub mod rng;
 pub mod sim;
 pub mod special;

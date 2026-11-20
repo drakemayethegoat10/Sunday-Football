@@ -21,6 +21,8 @@ pub const GRAVITY: f32 = 10.72;
 const RELEASE_Z: f32 = 2.0;
 /// Floats per actor in the render snapshot.
 pub const STRIDE: usize = 8;
+/// Floats for the ball at the end of the render snapshot.
+pub const BALL_STRIDE: usize = 12;
 pub const N: usize = 22;
 pub(crate) const QB: usize = 5;
 pub(crate) const RB: usize = 6;
@@ -131,6 +133,19 @@ pub struct Actor {
     pub rush_cd: f32,
     /// Knocked off balance (brief slowdown).
     pub stagger: f32,
+    /// Radius of the player's puck (the circle that is his true body on the turf).
+    pub radius: f32,
+    /// Just shed a block: can't be re-engaged by `shed_from` for a moment.
+    pub shed_cd: f32,
+    pub shed_from: Option<usize>,
+    /// Which way a defender is working across his blocker (+1 / -1 along the blocker's left).
+    pub rush_side: f32,
+    /// Blocker's hands knocked away (swim / spin) for this long.
+    pub grip_off: f32,
+    /// Bull rush: extra drive for this long.
+    pub drive_boost: f32,
+    /// Direction of the current move's burst (juke).
+    pub mv_dir: V2,
 }
 
 impl Actor {
@@ -172,6 +187,13 @@ impl Actor {
             wrap_off: V2::ZERO,
             rush_cd: 0.0,
             stagger: 0.0,
+            radius: crate::puck::radius_for(pl.pos, r.strength),
+            shed_cd: 0.0,
+            shed_from: None,
+            rush_side: 1.0,
+            grip_off: 0.0,
+            drive_boost: 0.0,
+            mv_dir: V2::ZERO,
         }
     }
     pub(crate) fn upright(&self) -> bool {
@@ -211,11 +233,13 @@ pub struct Flag {
     pub player: String,
 }
 
-/// User (or CPU) kick: power 0–1, accuracy -1 (hook left) .. 1 (slice right).
+/// User (or CPU) kick: power 0–1, accuracy -1 (hook left) .. 1 (slice right), and aim
+/// -1 (left) .. 1 (right) of the kick's natural line, from the kicker's point of view.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct KickParams {
     pub power: f32,
     pub accuracy: f32,
+    pub aim: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -469,11 +493,11 @@ impl Play {
                             drop_time = 0.35 + drop * 0.22;
                             let mesh = if play_action { Some(to_world(-3.0, 0.3)) } else { None };
                             if play_action {
-                                drop_time += 0.7;
+                                drop_time += 0.45;
                             }
                             if boot != 0.0 {
                                 // Bootleg: roll out toward the boot side.
-                                drop_time += 0.5;
+                                drop_time += 0.3;
                                 (to_world(-depth.min(6.0), boot), mesh)
                             } else {
                                 (to_world(-depth, 0.0), mesh)
@@ -751,7 +775,7 @@ impl Play {
         self.user_team == Some(self.off_team)
     }
 
-    fn is_pass(&self) -> bool {
+    pub(crate) fn is_pass(&self) -> bool {
         matches!(self.kind, PlayKind::Pass { .. })
     }
 
@@ -789,9 +813,11 @@ impl Play {
                         return b;
                     }
                 }
+                // Carried high and tight against the chest (the renderer puts it in the
+                // carrying arm; this is the point the camera and loose balls use).
                 let f = a.facing_v();
-                let h = if a.anim == Anim::Down { 0.35 } else if a.anim == Anim::Throw { 1.9 } else { 1.15 };
-                V3::new(a.p.x + f.x * 0.32, a.p.y + f.y * 0.32, a.z + h)
+                let h = if a.anim == Anim::Down { 0.35 } else if a.anim == Anim::Throw { 1.9 } else { 1.45 };
+                V3::new(a.p.x + f.x * 0.2, a.p.y + f.y * 0.2, a.z + h)
             }
             Ball::Air { pos, .. } => *pos,
             Ball::Loose(p) => *p,
@@ -827,7 +853,7 @@ impl Play {
         }
     }
 
-    fn screen_releasing(&self, i: usize) -> bool {
+    pub(crate) fn screen_releasing(&self, i: usize) -> bool {
         self.screen && i < 5 && self.t > 0.9 && !matches!(self.ball, Ball::Held(c) if c != QB)
     }
 
@@ -906,6 +932,9 @@ impl Play {
             a.bite = (a.bite - dt).max(0.0);
             a.rush_cd = (a.rush_cd - dt).max(0.0);
             a.stagger = (a.stagger - dt).max(0.0);
+            a.shed_cd = (a.shed_cd - dt).max(0.0);
+            a.grip_off = (a.grip_off - dt).max(0.0);
+            a.drive_boost = (a.drive_boost - dt).max(0.0);
             if a.move_t > 0.0 {
                 a.move_t -= dt;
                 if a.move_t <= 0.0 {
@@ -978,7 +1007,7 @@ impl Play {
         self.blocking(dt, rng);
 
         // 7. Collisions.
-        self.collisions();
+        self.puck_collisions();
 
         // 8. Ball flight and catches.
         if self.special.is_some() {
@@ -1094,8 +1123,9 @@ impl Play {
                 } else {
                     -1.0
                 };
-                let burst = 3.2 + a.r.agility as f32 * 0.028;
-                a.v = fwd * (a.v.len() * 0.65) + perp * (side * burst);
+                // The cut itself happens in `integrate`: a short, explosive lateral
+                // acceleration of the puck, so momentum carries through it.
+                a.mv_dir = perp * side;
                 a.mv = Move::Juke;
                 a.move_t = 0.35;
                 a.move_cd = 0.9;
@@ -1281,7 +1311,22 @@ impl Play {
     }
 
     fn cpu_qb(&mut self, rng: &mut Rng) {
-        if self.t < self.drop_time || !self.actors[QB].upright() {
+        if !self.actors[QB].upright() {
+            return;
+        }
+        if self.t < self.drop_time {
+            // Still in the fake or the drop: only a free rusher in his face hurries him.
+            let hot = self.nearest_opponent(QB, true).map(|j| self.actors[j].p.dist(self.actors[QB].p)).unwrap_or(99.0);
+            if hot > 2.2 || self.t < 0.8 {
+                return;
+            }
+            let best = self.route_actors.iter().copied().map(|r| (r, self.separation(r))).max_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+            if let Some((r, sep)) = best {
+                if sep > 1.2 {
+                    let kind = self.auto_throw_kind(r);
+                    self.throw_to(r, kind, V2::ZERO, rng);
+                }
+            }
             return;
         }
         let pocket = self.t - self.drop_time;
@@ -1315,7 +1360,10 @@ impl Play {
                 return;
             }
         }
-        if pressure < 1.9 || pocket > 4.0 {
+        // Feel the rush: a free rusher closing in hurries the throw, if the QB notices him
+        // in time (aware quarterbacks feel it sooner).
+        let feel = pressure < 2.8 && rng.chance((1.0 + 3.0 * awareness / 99.0) / 60.0);
+        if feel || pocket > 4.0 {
             let best = self
                 .route_actors
                 .iter()
@@ -1324,18 +1372,19 @@ impl Play {
                 .map(|r| (r, self.separation(r)))
                 .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
             if let Some((r, sep)) = best {
-                if sep > 1.3 {
+                if sep > 1.7 {
                     let kind = self.auto_throw_kind(r);
                     self.throw_to(r, kind, V2::ZERO, rng);
                     return;
                 }
             }
-            if pocket > 3.2 && self.actors[QB].r.speed > 70 && pressure > 1.5 {
+            if pocket > 2.4 && self.actors[QB].r.speed > 70 && pressure > 1.5 {
                 // Scramble.
                 self.actors[QB].task = Task::Carrier;
                 self.scramble = true;
                 self.set_react_all(self.off_team);
-            } else if pressure < 1.3 || pocket > 4.8 {
+            } else if pocket > 4.8 || (pressure < 2.2 && rng.chance((0.8 + 2.4 * awareness / 99.0) / 60.0)) {
+                // Sees the rusher in time (or not) and throws it away.
                 // Throw it away out of bounds.
                 let qb = self.actors[QB].p;
                 let side = if qb.y < FIELD_W * 0.5 { -4.0 } else { FIELD_W + 4.0 };
@@ -1398,7 +1447,7 @@ impl Play {
             .map(|j| self.actors[j].p.dist(qb.p))
             .unwrap_or(99.0);
         let dist = target.dist(release);
-        let mut sigma = (100.0 - acc) * 0.011 + dist * 0.012 * (1.15 - acc / 99.0);
+        let mut sigma = (100.0 - acc) * 0.013 + dist * 0.016 * (1.15 - acc / 99.0);
         if pressure < 2.5 {
             sigma += (2.5 - pressure) * 0.35;
         }
@@ -1566,14 +1615,11 @@ impl Play {
                     self.block_desire(i, a.p)
                 }
             }
-            Task::Rush { lane } => {
+            Task::Rush { .. } => {
                 if !self.qb_in_pocket() {
                     return self.pursue(i);
                 }
-                let qb = self.actors[QB].p;
-                let dist = a.p.dist(qb);
-                let target = qb + V2::new(0.0, *lane * clamp(dist / 6.0, 0.0, 1.0));
-                seek(a.p, target, a.top)
+                seek(a.p, self.rusher_aim(i), a.top)
             }
             Task::Man { target } => self.man_desire(i, *target),
             Task::Zone { spot, deep } => self.zone_desire(i, *spot, *deep),
@@ -1596,6 +1642,16 @@ impl Play {
             Task::ReturnBlock { home } => self.return_block_desire(i, *home),
             Task::Returner => self.returner_desire(i),
             Task::Fetch => seek(a.p, self.ball_pos().xy(), a.top),
+        }
+    }
+
+    /// Where a pass rusher is heading: the quarterback, edge rushers arcing outside him.
+    pub(crate) fn rusher_aim(&self, i: usize) -> V2 {
+        let a = &self.actors[i];
+        let qb = self.actors[QB].p;
+        match a.task {
+            Task::Rush { lane } => qb + V2::new(0.0, lane * clamp(a.p.dist(qb) / 6.0, 0.0, 1.0)),
+            _ => qb,
         }
     }
 
@@ -1630,16 +1686,33 @@ impl Play {
             if !run_blocking && !matches!(o.task, Task::Rush { .. } | Task::Pursue) && d > 2.0 {
                 continue;
             }
-            let s = d + 0.5 * o.p.dist(protect);
+            let mut s = d + 0.5 * o.p.dist(protect);
+            if !run_blocking {
+                // Zone protection: leave a rusher to the teammate whose area he's in.
+                let mate = (0..N)
+                    .filter(|&k| k != i && self.actors[k].team == a.team && self.actors[k].engaged.is_none() && matches!(self.actors[k].task, Task::Block { .. }))
+                    .map(|k| (self.actors[k].p.y - o.p.y).abs())
+                    .fold(f32::MAX, f32::min);
+                if mate + 0.4 < (a.p.y - o.p.y).abs() {
+                    s += 6.0;
+                }
+            }
             if s < best_s {
                 best_s = s;
                 best = Some(j);
             }
         }
         if let Some(j) = best {
-            let o = self.actors[j].p;
-            let target = o + (protect - o).norm() * 0.85;
-            return seek(a.p, target, a.top * 0.92);
+            let o = &self.actors[j];
+            let reach = a.radius + o.radius;
+            if run_blocking {
+                let target = o.p + (protect - o.p).norm() * (reach * 0.95);
+                return seek(a.p, target, a.top * 0.92);
+            }
+            // Pass pro: kick-slide to a spot on the rusher's path to the quarterback,
+            // getting there before he does, so he runs into the blocker's puck.
+            let target = self.intercept_point(i, j, self.rusher_aim(j));
+            return seek(a.p, target, a.top * 0.9);
         }
         if run_blocking {
             seek(a.p, protect + self.dirv() * 4.0, a.top * 0.6)
@@ -1753,13 +1826,20 @@ impl Play {
             let mut score = c * 1.5;
             for j in 0..N {
                 let o = &self.actors[j];
-                if o.team == a.team || !o.upright() {
+                if j == i || !o.upright() || o.ragdoll {
                     continue;
                 }
-                let w = if o.engaged.is_some() { 0.3 } else { 1.0 };
                 let rel = o.p - a.p;
                 let along = rel.dot(d);
                 let lat = (rel.x * d.y - rel.y * d.x).abs();
+                if o.team == a.team {
+                    // Teammates' pucks are physical too: find the crease between blockers.
+                    if o.engaged.is_some() && along > 0.0 && along < 3.0 {
+                        score -= 0.6 * (-(lat / 0.8).powi(2)).exp();
+                    }
+                    continue;
+                }
+                let w = if o.engaged.is_some() { 0.3 } else { 1.0 };
                 if along > -1.5 && along < 10.0 {
                     score -= 2.4 * w * (-lat / 1.9).exp() * (1.0 - along.max(0.0) / 12.0);
                 }
@@ -1774,7 +1854,18 @@ impl Play {
             }
         }
         let cur = a.v.norm();
-        let d = if cur.len_sq() > 0.0 { (best * 0.65 + cur * 0.35).norm() } else { best };
+        let mut d = if cur.len_sq() > 0.0 { (best * 0.65 + cur * 0.35).norm() } else { best };
+        // Run discipline: until he reaches the line, the back presses the play's hole
+        // and only shades toward daylight; he cuts once he's there.
+        if let PlayKind::Run { hole_l, .. } = self.kind {
+            let behind = (self.los_x - a.p.x) * td;
+            if i == self.handoff_to && a.team == self.off_team && behind > -0.5 && self.catch_spot.is_none() {
+                let hole = V2::new(self.los_x + td * 1.5, clamp(self.ball_y + td * hole_l, 1.0, FIELD_W - 1.0));
+                let to_hole = (hole - a.p).norm();
+                let w = clamp((behind + 0.5) / 2.5, 0.0, 1.0) * 0.75;
+                d = (to_hole * w + d * (1.0 - w)).norm();
+            }
+        }
         d * a.top
     }
 
@@ -1782,24 +1873,25 @@ impl Play {
         let a = &self.actors[i];
         let Some(c) = self.carrier else { return V2::ZERO };
         let cp = self.actors[c].p;
+        // Returns develop over a long field: look for threats much farther out.
+        let range = if self.special.is_some() { 22.0 } else { 9.0 };
         let mut best = None;
         let mut best_d = f32::MAX;
         for j in 0..N {
             let o = &self.actors[j];
-            if o.team == a.team || !o.upright() || o.engaged.is_some() {
+            if o.team == a.team || !o.upright() || o.engaged.is_some() || o.ragdoll {
                 continue;
             }
             let d = o.p.dist(cp);
-            if d < 9.0 && d + o.p.dist(a.p) * 0.6 < best_d {
+            // Only threats I can still get in front of (not ones already past me).
+            let ahead = (o.p - a.p).dot((o.p - cp).norm()) > -1.0;
+            if d < range && ahead && d + o.p.dist(a.p) * 0.6 < best_d {
                 best_d = d + o.p.dist(a.p) * 0.6;
                 best = Some(j);
             }
         }
         match best {
-            Some(j) => {
-                let o = self.actors[j].p;
-                seek(a.p, o + (cp - o).norm() * 0.8, a.top)
-            }
+            Some(j) => seek(a.p, self.intercept_point(i, j, cp), a.top),
             None => {
                 let td = self.team_dir(a.team);
                 seek(a.p, cp + V2::new(td * 3.0, 0.0), a.top * 0.85)
@@ -1813,7 +1905,15 @@ impl Play {
 
     fn integrate(&mut self, i: usize, desired: V2, dt: f32) {
         let is_carrier = self.carrier == Some(i);
-        let drag = if is_carrier && !self.wraps.is_empty() { (1.0 - 0.55 * self.wraps.len() as f32).max(0.15) } else { 1.0 };
+        // Tacklers hanging on add their mass to the carrier's puck and pull against him.
+        let (drag, brake) = if is_carrier && !self.wraps.is_empty() {
+            let m = self.actors[i].mass;
+            let hang: f32 = self.wraps.iter().map(|&w| self.actors[w].mass * 0.7).sum();
+            let pull: f32 = self.wraps.iter().map(|&w| (self.actors[w].r.tackle as f32 + self.actors[w].r.strength as f32) / 198.0).sum();
+            (m / (m + hang), pull * 0.8)
+        } else {
+            (1.0, 0.0)
+        };
         let a = &mut self.actors[i];
         if a.engaged.is_some() || a.wrapping || a.ragdoll {
             return;
@@ -1834,11 +1934,26 @@ impl Play {
                 max_acc *= 0.3;
                 desired = desired * 0.45;
             }
+            max_acc *= drag;
             match a.mv {
                 Move::Spin => desired = desired * 0.85,
                 Move::Stiff => desired = desired * 0.92,
-                Move::Juke => max_acc *= 0.35,
+                Move::Juke if a.move_t > 0.15 => {
+                    // Plant and cut: a big lateral burst, braking the forward speed.
+                    let fwd = if a.v.len() > 0.5 { a.v.norm() } else { a.facing_v() };
+                    let burst = 3.2 + a.r.agility as f32 * 0.028;
+                    desired = fwd * (a.v.len() * 0.6) + a.mv_dir * burst;
+                    max_acc = a.acc * (2.2 + a.r.agility as f32 * 0.012);
+                }
+                Move::Juke => max_acc *= 0.6,
                 _ => {}
+            }
+            if brake > 0.0 {
+                // Tacklers pulling back on the carrier.
+                let s = a.v.len();
+                if s > 0.0 {
+                    a.v = a.v * ((s - brake * dt).max(0.0) / s);
+                }
             }
             let dv = desired - a.v;
             let fwd = a.v.norm();
@@ -1905,154 +2020,6 @@ impl Play {
                     // Play-action fake done: pick up a blocker.
                     let home = self.actors[QB].p;
                     self.actors[i].task = Task::Block { home };
-                }
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Blocking
-    // -----------------------------------------------------------------------
-
-    fn blocking(&mut self, dt: f32, rng: &mut Rng) {
-        // New engagements.
-        for b in 0..N {
-            let ba = &self.actors[b];
-            let blocker = matches!(ba.task, Task::Block { .. } | Task::Escort | Task::ReturnBlock { .. })
-                || matches!(&ba.task, Task::Route { delay, .. } if self.t < *delay);
-            if !blocker || ba.engaged.is_some() || !ba.upright() || ba.stun > 0.0 || self.carrier == Some(b) {
-                continue;
-            }
-            if self.screen_releasing(b) {
-                continue;
-            }
-            let (bteam, bpos) = (ba.team, ba.p);
-            for d in 0..N {
-                let da = &self.actors[d];
-                if da.team == bteam || da.engaged.is_some() || !da.upright() || self.carrier == Some(d) || da.wrapping {
-                    continue;
-                }
-                if da.p.dist(bpos) < 1.0 {
-                    self.actors[b].engaged = Some(d);
-                    self.actors[b].engage_t = 0.0;
-                    self.actors[d].engaged = Some(b);
-                    self.actors[d].engage_t = 0.0;
-                    break;
-                }
-            }
-        }
-
-        // Resolve engaged pairs (iterate from the blocker side).
-        let goal = match self.carrier {
-            Some(c) => self.actors[c].p,
-            None => self.focus(),
-        };
-        let run_play = !self.qb_in_pocket();
-        for b in 0..N {
-            let Some(d) = self.actors[b].engaged else { continue };
-            if self.actors[d].engaged != Some(b) {
-                self.actors[b].engaged = None;
-                continue;
-            }
-            if self.screen_releasing(b) {
-                self.actors[b].engaged = None;
-                self.actors[d].engaged = None;
-                continue;
-            }
-            // Only process the pair once: the blocker is the one whose team has the ball
-            // (or the offense when nobody does).
-            let ball_team = self.carrier.map(|c| self.actors[c].team).unwrap_or(self.off_team);
-            if self.actors[b].team != ball_team {
-                continue;
-            }
-            let (bp, dp) = (self.actors[b].p, self.actors[d].p);
-            let br = self.actors[b].r;
-            let dr = self.actors[d].r;
-            let rush = if run_play { dr.run_stop } else { dr.pass_rush } as f32 * 0.6 + dr.strength as f32 * 0.4;
-            let blk = br.block as f32 * 0.6 + br.strength as f32 * 0.4 + 4.0;
-            let diff = rush - blk;
-            let mid = (bp + dp) * 0.5;
-            let to_goal = (goal - mid).norm();
-            let push = clamp(diff * 0.05, -1.4, 1.6) + 0.15;
-            let new_mid = mid + to_goal * (push * dt);
-            let sep = if to_goal.len_sq() > 0.0 { to_goal } else { (bp - dp).norm() };
-            self.actors[b].p = new_mid + sep * 0.42;
-            self.actors[d].p = new_mid - sep * 0.42;
-            self.actors[b].v = to_goal * push;
-            self.actors[d].v = to_goal * push;
-            self.actors[d].facing = sep.angle();
-            self.actors[b].facing = (-sep).angle();
-            self.actors[b].engage_t += dt;
-            self.actors[d].engage_t += dt;
-
-            let et = self.actors[d].engage_t;
-            let mut p = clamp(0.22 + diff * 0.015, 0.06, 0.8);
-            if et > 2.0 {
-                p += 0.35;
-            }
-            // Skill players can't hold a block for long.
-            if matches!(self.actors[b].pos, Pos::WR | Pos::RB | Pos::QB | Pos::CB | Pos::S | Pos::LB) {
-                // Return teams set up blocks with a head start, so they hold a bit longer.
-                p += if self.special.is_some() { 0.2 } else { 0.55 };
-            }
-            if let Some(c) = self.carrier {
-                let cd = self.actors[c].p.dist(dp);
-                if c != QB || !self.qb_in_pocket() {
-                    if cd < 2.5 {
-                        p += 1.6 * dr.run_stop as f32 / 99.0;
-                    } else if cd > 7.0 {
-                        p += 0.8;
-                    }
-                }
-            }
-            // Pass-rush moves: the user's on demand, the CPU's now and then.
-            if self.actors[d].rush_cd <= 0.0 && self.actors[d].engage_t > 0.35 && self.is_pass() && self.qb_in_pocket() {
-                let user_move = if self.user == Some(d) { self.user_rush.take() } else { None };
-                let cpu_move = if self.user != Some(d) && rng.chance(dt * 0.45) {
-                    Some(*rng.pick(&[RushMove::Swim, RushMove::Spin, RushMove::Bull]))
-                } else {
-                    None
-                };
-                if let Some(mv) = user_move.or(cpu_move) {
-                    if self.rush_move(d, b, mv, rng) {
-                        continue;
-                    }
-                }
-            }
-            // Offensive holding: more likely when the blocker is getting beaten.
-            if self.flags.is_empty() && self.actors[b].team == self.off_team && self.special.is_none() {
-                let hazard = (0.0022 + diff.max(0.0) * 0.00035) * self.penalty_rate;
-                if rng.chance(hazard * dt) {
-                    let spot = self.actors[b].p;
-                    self.throw_flag(Foul::OffensiveHolding, b, spot);
-                }
-            }
-            if rng.chance(p * dt) {
-                self.actors[b].engaged = None;
-                self.actors[d].engaged = None;
-                self.actors[b].stun = 0.35;
-                self.actors[d].v = to_goal * 2.5;
-            }
-        }
-    }
-
-    fn collisions(&mut self) {
-        for i in 0..N {
-            for j in (i + 1)..N {
-                let (ai, aj) = (&self.actors[i], &self.actors[j]);
-                if !ai.upright() || !aj.upright() || ai.engaged == Some(j) || ai.wrapping || aj.wrapping {
-                    continue;
-                }
-                let d = aj.p - ai.p;
-                let dist = d.len();
-                let min = 0.75;
-                if dist < min && dist > 1e-4 {
-                    let push = d / dist * (min - dist);
-                    let (mi, mj) = (ai.mass, aj.mass);
-                    let wi = mj / (mi + mj);
-                    let wj = mi / (mi + mj);
-                    self.actors[i].p -= push * wi;
-                    self.actors[j].p += push * wj;
                 }
             }
         }
@@ -2394,7 +2361,8 @@ impl Play {
     // Output
     // -----------------------------------------------------------------------
 
-    /// Fill `out` with `STRIDE` floats per actor, then 8 floats for the ball.
+    /// Fill `out` with `STRIDE` floats per actor, then `BALL_STRIDE` floats for the ball:
+    /// position, state, holder, velocity, then the target marker (kind, x, y, time left).
     pub fn snapshot(&self, out: &mut Vec<f32>) {
         out.clear();
         let intended = match &self.ball {
@@ -2440,7 +2408,25 @@ impl Play {
             Ball::Air { vel, .. } => (vel.x, vel.y),
             _ => (0.0, 0.0),
         };
-        out.extend_from_slice(&[b.x, b.y, b.z, state, holder, vx, vy, 0.0]);
+        // Target marker: where a pass (1) or kick (2) is coming down, and how soon.
+        let (mark, tx, ty, tleft) = match &self.ball {
+            Ball::Air { pos, target, arrive, t, .. } if !self.fumble && self.phase == PlayPhase::Live => {
+                let kick = self.special.as_ref().filter(|s| s.kicked && !s.touched && !s.landed);
+                if self.special.is_none() && self.thrown {
+                    (1.0, target.x, target.y, (arrive - t).max(0.0))
+                } else if let Some(sp) = kick {
+                    // Time until the kick comes down to catching height.
+                    let (z, vz) = (pos.z - 1.4, sp.vel.z);
+                    let disc = vz * vz + 2.0 * GRAVITY * z;
+                    let tl = if disc > 0.0 { ((vz + disc.sqrt()) / GRAVITY).max(0.0) } else { 0.0 };
+                    (2.0, sp.land.x, sp.land.y, tl)
+                } else {
+                    (0.0, 0.0, 0.0, 0.0)
+                }
+            }
+            _ => (0.0, 0.0, 0.0, 0.0),
+        };
+        out.extend_from_slice(&[b.x, b.y, b.z, state, holder, vx, vy, mark, tx, ty, tleft, 0.0]);
     }
 }
 

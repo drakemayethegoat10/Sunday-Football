@@ -101,6 +101,18 @@ export class Input {
     return codes.some((c) => this.keys.has(c));
   }
 
+  /** The current move direction (keys or stick) without consuming any buttons. */
+  peekAxis(): [number, number] {
+    let ix = 0;
+    let iy = 0;
+    if (this.down('KeyW', 'ArrowUp')) iy += 1;
+    if (this.down('KeyS', 'ArrowDown')) iy -= 1;
+    if (this.down('KeyD', 'ArrowRight')) ix += 1;
+    if (this.down('KeyA', 'ArrowLeft')) ix -= 1;
+    if (Math.hypot(this.padMove[0], this.padMove[1]) > Math.hypot(ix, iy)) [ix, iy] = this.padMove;
+    return [ix, iy];
+  }
+
   /** Read this frame's input. Edge-triggered buttons are cleared after the first read. */
   consume(): FrameInput {
     let ix = 0;

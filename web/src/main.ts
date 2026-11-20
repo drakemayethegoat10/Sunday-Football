@@ -14,6 +14,7 @@ import { Stadium, UI_FONT } from './render/stadium';
 import { Ps2Pipeline } from './render/pipeline';
 import { setNumberFont } from './render/athlete';
 import { Players } from './render/players';
+import { KickAim, TargetMarker } from './render/guides';
 import { CameraRig } from './render/camera';
 import { BTN, Input } from './input';
 import { Gamepads, PAD, type PadState } from './gamepad';
@@ -22,7 +23,7 @@ import { Replay } from './replay';
 import { UI, type TeamStatLine, type TitleChoice } from './ui';
 import { Sfx } from './audio';
 import { Quality, type QualityMode } from './quality';
-import { FLAG, N, STRIDE, type GameEvent, type Hud, type LineupEntry, type MenuItem, type TeamInfo } from './types';
+import { BALL_STRIDE, FLAG, N, STRIDE, type GameEvent, type Hud, type LineupEntry, type MenuItem, type TeamInfo } from './types';
 
 const TEAMS = (teamsData as { teams: TeamInfo[] }).teams;
 const STEP = 1 / 60;
@@ -53,6 +54,8 @@ interface Session {
   rag: Float32Array;
   ballVel: THREE.Vector3;
   lastBall: THREE.Vector3;
+  aim: KickAim;
+  target: TargetMarker;
 }
 
 let renderer: THREE.WebGLRenderer | null = null;
@@ -67,10 +70,18 @@ let fpsTime = 0;
 let usingPad = false;
 const replay = new Replay();
 
-const meter = new KickMeter((power, accuracy) => {
-  session?.game.kick(power, accuracy);
+const meter = new KickMeter((power, accuracy, aim) => {
+  session?.game.kick(power, accuracy, aim);
   sfx.ui();
 });
+
+/** Engine view: draw every player's puck. Remembered between visits. */
+let showCircles = false;
+try {
+  showCircles = localStorage.getItem('sf-circles') === '1';
+} catch {
+  /* storage blocked (school Chromebook policies) */
+}
 
 // ---------------------------------------------------------------------------
 // Setup
@@ -140,7 +151,10 @@ function newSession(home: TeamInfo, away: TeamInfo, o: SessionOpts): Session {
     rag: new Float32Array(0),
     ballVel: new THREE.Vector3(),
     lastBall: new THREE.Vector3(),
+    aim: new KickAim(scene),
+    target: new TargetMarker(scene),
   };
+  players.showCircles = showCircles;
   meter.fillTime = [1.25, 0.95, 0.8, 0.68][o.difficulty] ?? 0.95;
   applyLineup(s);
   cam.cut();
@@ -202,6 +216,7 @@ function labels() {
     camera: session?.cam.presetName ?? '',
     quality: quality.label,
     mute: sfx.muted ? 'OFF' : 'ON',
+    circles: showCircles ? 'ON' : 'OFF',
   };
 }
 
@@ -224,6 +239,15 @@ function togglePause() {
         break;
       case 'mute':
         sfx.toggleMute();
+        break;
+      case 'circles':
+        showCircles = !showCircles;
+        s.players.showCircles = showCircles;
+        try {
+          localStorage.setItem('sf-circles', showCircles ? '1' : '0');
+        } catch {
+          /* storage blocked */
+        }
         break;
       case 'quit':
         quitToTitle();
@@ -429,6 +453,7 @@ function handlePad(p: PadState, s: Session | null) {
     return;
   }
   if (meterActive(s)) {
+    input.padMove = [p.ix, p.iy]; // the left stick aims the kick
     if (p.pressed.has(PAD.A)) meter.press();
     return;
   }
@@ -613,6 +638,7 @@ function frame(now: number, draw = true) {
 
   s.players.padIcons = usingPad;
   s.players.update(s.prev, s.cur, alpha, dt, time, s.rag);
+  updateTarget(s, s.cur);
   const scrimmageLines = s.hud.situation !== 'kickoff' && !s.hud.special;
   s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, scrimmageLines && s.hud.to_go !== 'Goal', s.hud.down, s.hud.dir);
   s.stadium.setScoreboard(s.hud);
@@ -646,11 +672,27 @@ function frame(now: number, draw = true) {
     ui.hint(contextHint(s));
     ui.throwMeter(input.holdProgress());
 
-    // Kick meter for the user's kicks.
+    // Kick meter for the user's kicks, with the aim arrow and landing ring on the field.
     const kicking = meterActive(s);
     const title = { kickoff: 'KICKOFF', punt: 'PUNT', fg: 'FIELD GOAL', pat: 'EXTRA POINT', '': 'KICK' }[h.special] ?? 'KICK';
     meter.show(kicking, title);
-    if (kicking) meter.update(dt);
+    if (kicking) {
+      meter.pad = usingPad;
+      meter.steer(input.peekAxis()[0], dt);
+      meter.update(dt);
+      const pv = s.game.kick_preview(meter.previewPower(), meter.aim);
+      if (pv.length >= 5) {
+        const fg = h.special === 'fg' || h.special === 'pat';
+        meter.isFieldGoal = fg;
+        meter.clears = pv[4] > 0.5;
+        meter.distance = Math.hypot(pv[2] - pv[0], pv[3] - pv[1]);
+        s.aim.show(pv[0], pv[1], pv[2], pv[3], meter.stage !== 'idle' || !fg, !fg || pv[4] > 0.5, time);
+      } else {
+        s.aim.hide();
+      }
+    } else {
+      s.aim.hide();
+    }
 
     // Play calling.
     if (h.phase === 'playcall' && h.user_choosing && !s.paused) {
@@ -700,6 +742,16 @@ function frame(now: number, draw = true) {
   if (draw) pipeline!.render(s.scene, s.cam.camera);
 }
 
+/** Pass / kick target marker from the snapshot's ball block. */
+function updateTarget(s: Session, snap: Float32Array) {
+  const b = N * STRIDE;
+  if (s.attract || snap.length < b + BALL_STRIDE) {
+    s.target.hide();
+    return;
+  }
+  s.target.update(snap[b + 7], snap[b], snap[b + 1], snap[b + 2], snap[b + 8], snap[b + 9], snap[b + 10], time);
+}
+
 function replayFrame(s: Session, dt: number, draw: boolean) {
   replay.advance(dt);
   const f = replay.frames();
@@ -708,6 +760,7 @@ function replayFrame(s: Session, dt: number, draw: boolean) {
     return;
   }
   s.players.update(f.a.snap, f.b.snap, f.alpha, dt * replay.speed, time, f.b.rag);
+  updateTarget(s, f.b.snap);
   s.cam.replay(dt, s.players.ballPos, replay.cam, replay.time);
   const pct = replay.length > 1 ? replay.t / (replay.length - 1) : 0;
   (document.querySelector('#replay-bar .rb-fill') as HTMLElement).style.width = `${Math.round(pct * 100)}%`;
@@ -789,6 +842,16 @@ if (import.meta.env.DEV) {
       cv.id = 'atlas-debug';
       document.getElementById('atlas-debug')?.remove();
       document.body.appendChild(cv);
+    },
+    players: () => session?.players,
+    /** Switch graphics quality (e.g. 'ultra' for native-resolution screenshots). */
+    quality(mode: string) {
+      quality.setMode(mode as QualityMode);
+      applyQuality();
+    },
+    /** Draw one frame now (the hidden preview pane doesn't run animation frames). */
+    draw() {
+      if (session && pipeline) pipeline.render(session.scene, session.cam.camera);
     },
     tick(seconds: number) {
       const frames = Math.round(seconds * 60);

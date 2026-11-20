@@ -50,6 +50,8 @@ export interface LineupEntry {
   name: string;
   skin: number;
   build: number;
+  /** Radius of the player's puck in yards. */
+  radius?: number;
 }
 
 export interface MenuItem {
@@ -65,8 +67,10 @@ export interface GameEvent {
   [k: string]: unknown;
 }
 
-/** Floats per player in the core snapshot. */
+/** Floats per player in the core snapshot, then BALL_STRIDE floats for the ball. */
 export const STRIDE = 8;
+/** Ball block: x, y, z, state, holder, vx, vy, then the target marker: kind, x, y, time left. */
+export const BALL_STRIDE = 12;
 export const N = 22;
 export const FIELD_LEN = 120;
 export const FIELD_W = 53.333;

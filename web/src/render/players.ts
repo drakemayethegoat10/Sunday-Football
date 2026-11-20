@@ -138,6 +138,9 @@ const Q_CI = Q_C.clone().invert();
 const tmpQ = Array.from({ length: 11 }, () => new THREE.Quaternion());
 const tmpInv = new THREE.Quaternion();
 const tmpV = new THREE.Vector3();
+const WHITE = new THREE.Color('#ffffff');
+/** The ball's long axis (x) laid along a forearm bone (y). */
+const BALL_ALONG_FOREARM = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
 /** Ragdoll part order from the core (see physics.rs). */
 const RP = { Pelvis: 0, Torso: 1, Head: 2, UpperArmL: 3, ForeArmL: 4, UpperArmR: 5, ForeArmR: 6, ThighL: 7, ShinL: 8, ThighR: 9, ShinR: 10 };
 
@@ -152,7 +155,13 @@ class Rig {
   downSide = 1;
   build = 1;
   number = 0;
+  pos = '';
+  /** Radius of this player's puck (his true body on the turf), in yards. */
+  radius = 0.35;
   ragdolled = false;
+  /** Velocity last frame and smoothed acceleration (forward, left) of the puck. */
+  lastV = new THREE.Vector2();
+  accel = new THREE.Vector2();
   private lastAnim = -1;
   private animT = 0;
 
@@ -174,6 +183,8 @@ class Rig {
     this.helmet.geometry = helmetGeo;
     this.build = e.build;
     this.number = e.number;
+    this.pos = e.pos;
+    this.radius = e.radius ?? 0.35;
     this.ragdolled = false;
     const sx = [0.93, 1.0, 1.13][e.build] ?? 1;
     const sz = [0.9, 1.0, 1.2][e.build] ?? 1;
@@ -181,6 +192,11 @@ class Rig {
     this.downSide = e.number % 2 ? 1 : -1;
   }
 
+  /**
+   * Pose the body on top of its puck. `lateral`/`forward`: the puck's velocity relative to
+   * the facing; the body leans with the puck's acceleration (`this.accel`), never the
+   * other way round.
+   */
   animate(dt: number, anim: number, speed: number, carrier: boolean, time: number, lateral: number, forward: number) {
     this.ragdolled = false;
     if (anim !== this.lastAnim) {
@@ -309,10 +325,23 @@ class Rig {
         break;
     }
 
-    if (carrier && anim !== ANIM.Down && anim !== ANIM.Throw && anim !== ANIM.Stiff && anim !== ANIM.Celebrate && anim !== ANIM.Hurdle) {
-      t.armR = 0.7;
-      t.elbR = 2.0;
-      t.armRx = -0.2;
+    // Lean with the puck: forward when it accelerates, back when it brakes, into cuts.
+    const moving = anim === ANIM.Run || anim === ANIM.Juke || anim === ANIM.Spin || anim === ANIM.Stiff || anim === ANIM.Truck || anim === ANIM.Stagger || anim === ANIM.Catch;
+    if (moving) {
+      t.leanZ -= Math.max(-0.22, Math.min(0.28, this.accel.x * 0.025));
+      t.leanX -= Math.max(-0.3, Math.min(0.3, this.accel.y * 0.03));
+    }
+
+    if (carrier && anim !== ANIM.Down && anim !== ANIM.Throw && anim !== ANIM.Celebrate && anim !== ANIM.Hurdle) {
+      if (this.pos === 'QB' && speed < 4.5 && (anim === ANIM.Idle || anim === ANIM.Run || anim === ANIM.Stance)) {
+        // Quarterback in the pocket: ball held in both hands at the chest.
+        Object.assign(t, { armL: 0.55, armR: 0.55, elbL: 1.95, elbR: 1.95, armLx: 0.28, armRx: -0.28 });
+      } else {
+        // High and tight: upper arm against the ribs, forearm up, ball tucked at the chest.
+        t.armR = 0.3;
+        t.elbR = 2.2;
+        t.armRx = -0.18;
+      }
     }
 
     const k = 1 - Math.exp(-dt * (anim === ANIM.Down || anim === ANIM.Dive ? 9 : 16));
@@ -398,7 +427,10 @@ export class Players {
   private iconMatsPad: THREE.SpriteMaterial[] = [];
   /** Show controller button labels (A/B/X/Y/RB) instead of numbers on receivers. */
   padIcons = false;
-  private ring: THREE.Mesh;
+  private ring: THREE.Group;
+  private circles: THREE.InstancedMesh;
+  /** Show every player's puck (the circle that is his true body on the turf). */
+  showCircles = false;
   private ball: THREE.Group;
   private ballShadow: THREE.Mesh;
   private ao: THREE.InstancedMesh;
@@ -455,13 +487,29 @@ export class Players {
       this.icons.push(s);
       this.group.add(s);
     }
-    this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.55, 0.78, 24),
-      new THREE.MeshBasicMaterial({ color: '#ffe14a', transparent: true, opacity: 0.9, depthWrite: false }),
+    // User marker: a ring on the edge of his puck with a notch showing which way he faces.
+    const ringMat = new THREE.MeshBasicMaterial({ color: '#ffe14a', transparent: true, opacity: 0.95, depthWrite: false });
+    this.ring = new THREE.Group();
+    const band = new THREE.Mesh(new THREE.RingGeometry(1.0, 1.32, 32).rotateX(-Math.PI / 2), ringMat);
+    const notch = new THREE.Mesh(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(1.38, 0, -0.42), new THREE.Vector3(1.38, 0, 0.42), new THREE.Vector3(2.0, 0, 0)]),
+      ringMat,
     );
-    this.ring.rotation.x = -Math.PI / 2;
-    this.ring.renderOrder = 3;
+    notch.geometry.setIndex([0, 1, 2]);
+    notch.geometry.computeVertexNormals();
+    (notch.material as THREE.MeshBasicMaterial).side = THREE.DoubleSide;
+    for (const m of [band, notch]) m.renderOrder = 3;
+    this.ring.add(band, notch);
     this.group.add(this.ring);
+    this.circles = new THREE.InstancedMesh(
+      new THREE.RingGeometry(0.7, 1.0, 28).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85, depthWrite: false }),
+      N,
+    );
+    this.circles.frustumCulled = false;
+    this.circles.renderOrder = 3;
+    this.circles.visible = false;
+    this.group.add(this.circles);
 
     // Ball: glossy leather spheroid with laces.
     this.ball = new THREE.Group();
@@ -513,10 +561,14 @@ export class Players {
   }
 
   setLineup(lineup: LineupEntry[]) {
+    const col = new THREE.Color();
     lineup.forEach((e, i) => {
       const t = e.team === 1 ? 1 : 0;
       this.rigs[i]?.skin(this.uniforms[t], this.helmets[t], e);
+      col.set(t === 0 ? this.uniforms[0].jersey : this.uniforms[1].trim).lerp(WHITE, 0.4);
+      this.circles.setColorAt(i, col);
     });
+    if (this.circles.instanceColor) this.circles.instanceColor.needsUpdate = true;
   }
 
   update(prev: Float32Array, cur: Float32Array, alpha: number, dt: number, time: number, rag?: Float32Array) {
@@ -545,11 +597,22 @@ export class Players {
         rig.root.position.set(x, z, -y);
         rig.facing = lerpAngle(rig.facing, facing, 1 - Math.exp(-dt * 20));
         rig.root.rotation.y = rig.facing;
-        // Velocity relative to facing (per sim step -> yards/second).
+        // Puck velocity relative to facing (per sim step -> yards/second), and its
+        // acceleration, which the body leans with.
         const vx = (cur[o] - prev[o]) * 60;
         const vy = (cur[o + 1] - prev[o + 1]) * 60;
         const lateral = -Math.sin(facing) * vx + Math.cos(facing) * vy;
         const forward = Math.cos(facing) * vx + Math.sin(facing) * vy;
+        if (dt > 0) {
+          const ax = (forward - rig.lastV.x) / Math.max(dt, 1 / 60);
+          const ay = (lateral - rig.lastV.y) / Math.max(dt, 1 / 60);
+          const k = 1 - Math.exp(-dt * 8);
+          if (Number.isFinite(ax) && Number.isFinite(ay) && Math.abs(ax) < 80 && Math.abs(ay) < 80) {
+            rig.accel.x += (ax - rig.accel.x) * k;
+            rig.accel.y += (ay - rig.accel.y) * k;
+          }
+          rig.lastV.set(forward, lateral);
+        }
         rig.animate(dt, anim, speed, (flags & FLAG.Carrier) !== 0, time, lateral, forward);
       }
 
@@ -579,13 +642,24 @@ export class Players {
       if (flags & FLAG.User) {
         this.userIndex = i;
         this.ring.position.set(x, 0.04, -y);
-        const pulse = 1 + Math.sin(time * 8) * 0.08;
-        this.ring.scale.set(pulse, pulse, pulse);
+        this.ring.rotation.y = rig.facing;
+        const r = (rig.radius + 0.06) * (1 + Math.sin(time * 8) * 0.05);
+        this.ring.scale.set(r, 1, r);
+      }
+      // Engine view: every player's puck.
+      if (this.showCircles) {
+        d.position.set(x, 0.035, -y);
+        d.rotation.set(0, 0, 0);
+        d.scale.set(rig.radius, 1, rig.radius);
+        d.updateMatrix();
+        this.circles.setMatrixAt(i, d.matrix);
       }
     }
     this.ao.instanceMatrix.needsUpdate = true;
     this.cast.instanceMatrix.needsUpdate = true;
     this.ring.visible = this.userIndex >= 0;
+    this.circles.visible = this.showCircles;
+    if (this.showCircles) this.circles.instanceMatrix.needsUpdate = true;
 
     // Sideline squads sway, and bounce when the crowd is excited.
     for (const sq of this.squads) {
@@ -617,6 +691,14 @@ export class Players {
       this.ball.rotation.set(0, Math.atan2(vy, vx), 0);
       this.ballSpin += dt * 30;
       this.ball.rotateX(this.ballSpin);
+    } else if (state === 1 && holder >= 0 && this.rigs[holder] && !this.rigs[holder].ragdolled && cur[holder * STRIDE + 4] !== ANIM.Throw && cur[holder * STRIDE + 4] !== ANIM.Down) {
+      // In the carrying arm: along the forearm, tucked against the chest.
+      const rig = this.rigs[holder];
+      rig.root.updateMatrixWorld(true);
+      const fore = rig.bones[BONE.elR];
+      fore.localToWorld(this.ball.position.set(0.02, -0.15, 0.03));
+      fore.getWorldQuaternion(this.ball.quaternion).multiply(BALL_ALONG_FOREARM);
+      this.ballPos.copy(this.ball.position);
     } else if (state === 1 && holder >= 0) {
       this.ball.rotation.set(0, this.rigs[holder].facing + 0.4, -0.3);
     } else {

@@ -119,6 +119,8 @@ pub struct LineupEntry {
     pub name: String,
     pub skin: u8,
     pub build: u8,
+    /// Radius of the player's puck in yards.
+    pub radius: f32,
 }
 
 /// Per-team box-score totals (the franchise stat book grows from this).
@@ -425,8 +427,20 @@ impl Game {
     }
 
     /// The user's kick meter result for the next kick.
-    pub fn set_kick(&mut self, power: f32, accuracy: f32) {
-        self.pending_kick = Some(KickParams { power: clamp(power, 0.0, 1.0), accuracy: clamp(accuracy, -1.0, 1.0) });
+    pub fn set_kick(&mut self, power: f32, accuracy: f32, aim: f32) {
+        self.pending_kick = Some(KickParams { power: clamp(power, 0.0, 1.0), accuracy: clamp(accuracy, -1.0, 1.0), aim: clamp(aim, -1.0, 1.0) });
+    }
+
+    /// Kick preview for the user's aim arrow: [origin x, y, landing x, y, clears (0/1)].
+    /// Empty when there's no kick to aim.
+    pub fn kick_preview(&self, power: f32, aim: f32) -> Vec<f32> {
+        if self.phase != Phase::InPlay || self.play.phase != PlayPhase::PreSnap {
+            return Vec::new();
+        }
+        match self.play.kick_preview(power, aim) {
+            Some((o, l, ok)) => vec![o.x, o.y, l.x, l.y, if ok { 1.0 } else { 0.0 }],
+            None => Vec::new(),
+        }
     }
 
     /// Call a timeout for `team` (between plays or before the snap). Returns true if granted.
@@ -1397,7 +1411,7 @@ impl Game {
         self.play
             .actors
             .iter()
-            .map(|a| LineupEntry { team: a.team, number: a.number, pos: a.pos.label(), name: a.name.clone(), skin: a.skin, build: a.pos.build() })
+            .map(|a| LineupEntry { team: a.team, number: a.number, pos: a.pos.label(), name: a.name.clone(), skin: a.skin, build: a.pos.build(), radius: a.radius })
             .collect()
     }
 

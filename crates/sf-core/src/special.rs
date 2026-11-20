@@ -90,6 +90,10 @@ pub struct SpecialSetup<'a> {
 }
 
 /// Where the receiving team's goal line is, as x.
+/// Crossbar height and half the distance between the uprights, in yards.
+pub const CROSSBAR_Z: f32 = 3.33;
+pub const UPRIGHT_HALF: f32 = 3.08;
+
 fn goal_x(recv_dir: f32) -> f32 {
     if recv_dir > 0.0 {
         110.0
@@ -319,16 +323,16 @@ impl Play {
         let acc = k.r.kick_acc as f32;
         let wobble = |rng: &mut Rng, s: f32| clamp(rng.normal() * s * (1.25 - acc / 120.0), -1.0, 1.0);
         match sp.kind {
-            StKind::Kickoff(KickStyle::Deep) => KickParams { power: clamp(0.93 + rng.normal() * 0.05, 0.75, 1.0), accuracy: wobble(rng, 0.25) },
-            StKind::Kickoff(KickStyle::Squib) => KickParams { power: 0.65, accuracy: wobble(rng, 0.3) },
-            StKind::Kickoff(KickStyle::Onside) => KickParams { power: 0.5, accuracy: if rng.chance(0.5) { 0.85 } else { -0.85 } },
+            StKind::Kickoff(KickStyle::Deep) => KickParams { power: clamp(0.93 + rng.normal() * 0.05, 0.75, 1.0), accuracy: wobble(rng, 0.25), aim: 0.0 },
+            StKind::Kickoff(KickStyle::Squib) => KickParams { power: 0.65, accuracy: wobble(rng, 0.3), aim: 0.0 },
+            StKind::Kickoff(KickStyle::Onside) => KickParams { power: 0.5, accuracy: if rng.chance(0.5) { 0.85 } else { -0.85 }, aim: 0.0 },
             StKind::Punt => {
                 // Pooch it inside the 10 when close, otherwise boom it.
                 let to_goal = (goal_x(self.dir) - self.los_x) * self.dir;
                 let want = (to_goal - 8.0).max(18.0);
                 let reach = 0.82 + k.r.kick_power as f32 * 0.0022;
                 let power = clamp((want / reach - 36.0) / 28.0, 0.1, 1.0);
-                KickParams { power: clamp(power + rng.normal() * 0.04, 0.2, 1.0), accuracy: wobble(rng, 0.22) }
+                KickParams { power: clamp(power + rng.normal() * 0.04, 0.2, 1.0), accuracy: wobble(rng, 0.22), aim: 0.0 }
             }
             StKind::FieldGoal { .. } => {
                 // Smallest power that clears the bar with a margin.
@@ -343,7 +347,7 @@ impl Play {
                 }
                 let dist = (self.posts_x() - self.los_x).abs();
                 let sigma_deg = 1.0 + (99.0 - acc) * 0.06 + dist * 0.02;
-                KickParams { power: clamp(power + 0.06, 0.0, 1.0), accuracy: clamp(rng.normal() * sigma_deg / 8.0, -1.0, 1.0) }
+                KickParams { power: clamp(power + 0.06, 0.0, 1.0), accuracy: clamp(rng.normal() * sigma_deg / 8.0, -1.0, 1.0), aim: 0.0 }
             }
         }
     }
@@ -370,15 +374,25 @@ impl Play {
         0.25 + v * th.sin() * t - 0.5 * GRAVITY * t * t
     }
 
-    /// Kick the ball: build its launch velocity from the kick parameters.
-    fn launch_kick(&mut self, rng: &mut Rng) {
-        let Some(sp) = self.special.clone() else { return };
+    /// Largest aim angle (radians) either side of the kick's natural line.
+    fn max_aim(kind: StKind) -> f32 {
+        match kind {
+            StKind::Kickoff(KickStyle::Onside) => 0.6,
+            StKind::Kickoff(_) => 0.35,
+            StKind::Punt => 0.45,
+            StKind::FieldGoal { .. } => 0.2,
+        }
+    }
+
+    /// The kick's launch from its parameters: origin, launch height, velocity, landing
+    /// spot. `noise` is the kicker's random error in degrees (0 for a preview).
+    fn kick_solution(&self, sp: &SpecialPlay, params: KickParams, noise: f32) -> (V2, f32, V3, V2) {
         let ki = self.kicker_index();
         let kr = self.actors[ki].r;
         let reach = 0.82 + kr.kick_power as f32 * 0.0022;
-        let pw = clamp(sp.params.power, 0.0, 1.0);
-        let acc = clamp(sp.params.accuracy, -1.0, 1.0);
-        let noise = rng.normal() * (0.3 + (99.0 - kr.kick_acc as f32) * 0.02);
+        let pw = clamp(params.power, 0.0, 1.0);
+        let acc = clamp(params.accuracy, -1.0, 1.0);
+        let aim_deg = clamp(params.aim, -1.0, 1.0) * Self::max_aim(sp.kind).to_degrees();
         let dirv = V2::new(self.dir, 0.0);
         let (origin, z0) = match sp.kind {
             StKind::Kickoff(_) => (sp.kick_spot, 0.2),
@@ -401,13 +415,46 @@ impl Play {
         } else {
             (range * GRAVITY / (2.0 * th).sin()).sqrt()
         };
-        // Positive accuracy slices right (rotate clockwise from the kicker's view).
-        let a = -(dev_deg as f32).to_radians();
+        // Positive accuracy and aim go right (rotate clockwise from the kicker's view).
+        let a = -((dev_deg + aim_deg) as f32).to_radians();
         let (sa, ca) = a.sin_cos();
         let h = V2::new(base.x * ca - base.y * sa, base.x * sa + base.y * ca);
         let vel = V3::new(h.x * v * th.cos(), h.y * v * th.cos(), v * th.sin());
         let hang = 2.0 * vel.z / GRAVITY;
         let land = origin + h * (v * th.cos() * hang);
+        (origin, z0, vel, land)
+    }
+
+    /// Where a kick with this power and aim would go, with no kicker error: the kick
+    /// origin, the landing spot (for field goals, where it crosses the goal line plane),
+    /// and for field goals whether it clears the crossbar between the uprights.
+    pub fn kick_preview(&self, power: f32, aim: f32) -> Option<(V2, V2, bool)> {
+        let sp = self.special.as_ref()?;
+        let params = KickParams { power, accuracy: 0.0, aim };
+        let (origin, z0, vel, land) = self.kick_solution(sp, params, 0.0);
+        if let StKind::FieldGoal { .. } = sp.kind {
+            let posts = self.posts_x();
+            let h = V2::new(vel.x, vel.y);
+            let t = (posts - origin.x) / h.x;
+            if !t.is_finite() || t <= 0.0 {
+                return Some((origin, land, false));
+            }
+            let at = origin + h * t;
+            let z = z0 + vel.z * t - 0.5 * GRAVITY * t * t;
+            let ok = z > CROSSBAR_Z && (at.y - FIELD_W * 0.5).abs() < UPRIGHT_HALF;
+            return Some((origin, at, ok));
+        }
+        Some((origin, land, true))
+    }
+
+    /// Kick the ball: build its launch velocity from the kick parameters.
+    fn launch_kick(&mut self, rng: &mut Rng) {
+        let Some(sp) = self.special.clone() else { return };
+        let ki = self.kicker_index();
+        let kr = self.actors[ki].r;
+        let noise = rng.normal() * (0.3 + (99.0 - kr.kick_acc as f32) * 0.02);
+        let (origin, z0, vel, land) = self.kick_solution(&sp, sp.params, noise);
+        let hang = 2.0 * vel.z / GRAVITY;
 
         // Blocked kick? Somebody got to the kick point.
         let blockable = !matches!(sp.kind, StKind::Kickoff(_));
@@ -583,7 +630,7 @@ impl Play {
         if let StKind::FieldGoal { .. } = sp.kind {
             let px = self.posts_x();
             if sp.fg_result.is_none() && (prev_x - px) * (pos.x - px) <= 0.0 && prev_x != pos.x {
-                let good = pos.z > 3.33 && (pos.y - FIELD_W * 0.5).abs() < 3.08;
+                let good = pos.z > CROSSBAR_Z && (pos.y - FIELD_W * 0.5).abs() < UPRIGHT_HALF;
                 let s = self.special.as_mut().unwrap();
                 s.fg_result = Some(good);
                 s.end_t = Some(self.t + 0.9);

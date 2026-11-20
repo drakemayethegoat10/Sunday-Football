@@ -26,7 +26,8 @@ fn run(seed: u64, off_call: usize, throw_at: f32, throw_to: u8, kind: u8, wiggle
         // Feed the kick meter whenever the user has to kick.
         if g.phase == Phase::InPlay && g.play.phase == PlayPhase::PreSnap && g.play.special.is_some() {
             let k = (steps % 7) as f32 / 7.0;
-            g.set_kick(0.55 + k * 0.45, (k - 0.5) * 0.6);
+            g.set_kick(0.55 + k * 0.45, (k - 0.5) * 0.6, (k - 0.5) * 1.6);
+            let _ = g.kick_preview(k, k - 0.5);
         }
         let user_off = g.user_on_offense() == Some(true);
         match g.play.phase {

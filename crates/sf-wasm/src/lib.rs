@@ -59,7 +59,7 @@ impl WebGame {
         self.game.step(dt, &input);
     }
 
-    /// 8 floats per player (22), then 8 for the ball. See `sim::Play::snapshot`.
+    /// 8 floats per player (22), then 12 for the ball. See `sim::Play::snapshot`.
     pub fn snapshot(&mut self) -> Vec<f32> {
         self.game.snapshot(&mut self.snap);
         self.snap.clone()
@@ -91,9 +91,15 @@ impl WebGame {
         self.game.call_play(idx as usize);
     }
 
-    /// Kick meter result: power 0–1, accuracy -1 (hook) .. 1 (slice).
-    pub fn kick(&mut self, power: f32, accuracy: f32) {
-        self.game.set_kick(power, accuracy);
+    /// Kick meter result: power 0–1, accuracy -1 (hook) .. 1 (slice), aim -1 (left) .. 1 (right).
+    pub fn kick(&mut self, power: f32, accuracy: f32, aim: f32) {
+        self.game.set_kick(power, accuracy, aim);
+    }
+
+    /// Where a kick with this power and aim would go: [origin x, y, landing x, y, clears].
+    /// Empty when there's no kick to aim.
+    pub fn kick_preview(&self, power: f32, aim: f32) -> Vec<f32> {
+        self.game.kick_preview(power, aim)
     }
 
     /// The human calls a timeout. Returns true if it was granted.
