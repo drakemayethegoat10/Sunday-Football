@@ -1009,12 +1009,15 @@ impl Play {
         // 7. Collisions.
         self.puck_collisions();
 
-        // 8. Ball flight and catches.
-        if self.special.is_some() {
-            self.special_flight(dt, rng);
-        } else {
-            self.ball_flight(dt, rng);
-            self.coverage_holding(dt, rng);
+        // 8. Ball flight and catches. A fumble in the air is not a pass or a kick: the
+        // contact step bounces it and decides who recovers it.
+        if !self.fumble {
+            if self.special.is_some() {
+                self.special_flight(dt, rng);
+            } else {
+                self.ball_flight(dt, rng);
+                self.coverage_holding(dt, rng);
+            }
         }
 
         // 9. Contact: tackles, wrap-ups, ragdolls, fumbles.

@@ -72,6 +72,9 @@ Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibiti
 - [x] New animation system: leg IK with planted feet, gait blending, backpedal, shuffle,
       crossover runs, head tracking, catch reaches, get-ups, position stances, QB throw
       and kicker swing, ball carried in the sideline-side arm
+- [x] Fixed: a fumble that hit the turf was being ruled an incomplete pass (or flown
+      like the kick on returns), so most fumbles were erased; with that fixed, fumble
+      odds were lowered to about 0.6 lost per team per game
 
 ## M3 — League data
 - 32 teams (after TEAMS.md is approved), Sarasota branding from the owner

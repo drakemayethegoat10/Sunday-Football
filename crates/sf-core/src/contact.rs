@@ -324,7 +324,7 @@ impl Play {
         // Gang tackles can strip the ball.
         if !big && participants.len() >= 2 && !self.fall_sack {
             let carry = ca.r.carrying as f32;
-            if rng.chance(0.05 * (1.35 - carry / 99.0)) {
+            if rng.chance(0.02 * (1.35 - carry / 99.0)) {
                 self.start_fumble(c, 2.0, rng);
                 return;
             }
@@ -333,7 +333,7 @@ impl Play {
             self.events.push(Event::BigHit);
             // Big hits can knock the ball loose.
             let carry = ca.r.carrying as f32;
-            let p_fum = 0.2 * (closing / 7.0).min(1.6) * (1.35 - carry / 99.0);
+            let p_fum = 0.06 * (closing / 7.0).min(1.6) * (1.35 - carry / 99.0);
             if !self.fall_sack && rng.chance(p_fum) {
                 self.start_fumble(c, closing, rng);
             } else if self.fall_sack && rng.chance(0.06) {
