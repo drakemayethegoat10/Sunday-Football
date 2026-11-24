@@ -36,6 +36,8 @@ export interface Hud {
   first_down_x: number;
   ball_y: number;
   dir: number;
+  /** Direction the team holding the ball attacks (flips mid-play on a turnover or return). */
+  ball_dir: number;
   lineup: number;
   off_play: string;
   def_play: string;

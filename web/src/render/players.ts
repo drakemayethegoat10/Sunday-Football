@@ -3,8 +3,10 @@
 
 import * as THREE from 'three';
 import { ANIM, FIELD_W, FLAG, LineupEntry, N, RAGDOLL_STRIDE, STRIDE, TeamInfo } from '../types';
+import { AnimCtx, POSE_KEYS, Pose, restPose, targetPose } from './anim';
 import {
   BONE,
+  Gear,
   HIPS_REST_Y,
   SKIN_TONES,
   UniformColors,
@@ -95,9 +97,21 @@ function iconTexture(i: number, pad = false): THREE.CanvasTexture {
   return t;
 }
 
-let BODY_GEO: THREE.BufferGeometry | null = null;
-function bodyGeo(): THREE.BufferGeometry {
-  return (BODY_GEO ??= buildBodyGeometry());
+const BODY_GEO = new Map<string, THREE.BufferGeometry>();
+/** Body mesh with a player's gear; `detail` < 1 for the sideline squads. */
+function bodyGeo(gear: Gear = 0, detail = 1): THREE.BufferGeometry {
+  const key = `${gear}|${detail}`;
+  let g = BODY_GEO.get(key);
+  if (!g) {
+    g = buildBodyGeometry(gear, detail);
+    BODY_GEO.set(key, g);
+  }
+  return g;
+}
+function gearFor(pos: string): Gear {
+  if (pos === 'OL' || pos === 'DL') return 2;
+  if (pos === 'QB' || pos === 'RB' || pos === 'WR') return 1;
+  return 0;
 }
 const HELMET_MAT = new THREE.MeshPhongMaterial({ vertexColors: true, shininess: 80, specular: new THREE.Color('#8a8a8a') });
 
@@ -119,19 +133,6 @@ function bodyMaterial(u: UniformColors, number: number, skin: number): THREE.Mes
 // One animated player
 // ---------------------------------------------------------------------------
 
-type Pose = {
-  hipsY: number; leanZ: number; leanX: number; bodyX: number; twist: number; headZ: number;
-  legL: number; legR: number; kneeL: number; kneeR: number; legLx: number; legRx: number;
-  armL: number; armR: number; armLx: number; armRx: number; elbL: number; elbR: number;
-};
-
-/** Default: an athletic ready stance with bent knees. */
-const REST: Pose = {
-  hipsY: 0.97, leanZ: -0.08, leanX: 0, bodyX: 0, twist: 0, headZ: 0,
-  legL: 0.12, legR: 0.05, kneeL: -0.28, kneeR: -0.22, legLx: 0, legRx: 0,
-  armL: 0.1, armR: 0.1, armLx: -0.2, armRx: 0.2, elbL: 0.45, elbR: 0.45,
-};
-
 // Core (z-up) -> three.js (y-up) rotation: q3 = C * q * C^-1, C = -90° about X.
 const Q_C = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), -Math.PI / 2);
 const Q_CI = Q_C.clone().invert();
@@ -143,13 +144,18 @@ const WHITE = new THREE.Color('#ffffff');
 const BALL_ALONG_FOREARM = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), Math.PI / 2);
 /** Ragdoll part order from the core (see physics.rs). */
 const RP = { Pelvis: 0, Torso: 1, Head: 2, UpperArmL: 3, ForeArmL: 4, UpperArmR: 5, ForeArmR: 6, ThighL: 7, ShinL: 8, ThighR: 9, ShinR: 10 };
+const SPIN_TIME = 0.5;
+
+/** Per-frame facts about one player, gathered by `Players.update` for the rig. */
+export type RigInput = Omit<AnimCtx, 'animT' | 'phase' | 'getUp' | 'downSide' | 'cutSide' | 'carryLeft' | 'pos' | 'build' | 'number'>;
 
 class Rig {
   root = new THREE.Group();
   bones: THREE.Bone[];
   body: THREE.SkinnedMesh;
   helmet: THREE.SkinnedMesh;
-  pose: Pose = { ...REST };
+  pose: Pose = restPose();
+  /** Stride phase: one step per pi, advanced by distance covered. */
   phase = Math.random() * 6;
   facing = 0;
   downSide = 1;
@@ -162,8 +168,15 @@ class Rig {
   /** Velocity last frame and smoothed acceleration (forward, left) of the puck. */
   lastV = new THREE.Vector2();
   accel = new THREE.Vector2();
+  /** Ball in the left arm (the one nearer the sideline he's running along). */
+  carryLeft = false;
+  private carrySwitch = 0;
+  private wasCarrier = false;
   private lastAnim = -1;
   private animT = 0;
+  private getUp = -1;
+  private cutSide = 1;
+  private spinDir = 1;
 
   constructor(helmetGeo: THREE.BufferGeometry) {
     const { bones, skeleton } = makeSkeleton();
@@ -179,6 +192,7 @@ class Rig {
   }
 
   skin(u: UniformColors, helmetGeo: THREE.BufferGeometry, e: LineupEntry) {
+    this.body.geometry = bodyGeo(gearFor(e.pos));
     this.body.material = bodyMaterial(u, e.number, e.skin);
     this.helmet.geometry = helmetGeo;
     this.build = e.build;
@@ -186,6 +200,7 @@ class Rig {
     this.pos = e.pos;
     this.radius = e.radius ?? 0.35;
     this.ragdolled = false;
+    this.carryLeft = false;
     const sx = [0.93, 1.0, 1.13][e.build] ?? 1;
     const sz = [0.9, 1.0, 1.2][e.build] ?? 1;
     this.bones[BONE.root].scale.set(sx, 1, sz);
@@ -193,177 +208,90 @@ class Rig {
   }
 
   /**
-   * Pose the body on top of its puck. `lateral`/`forward`: the puck's velocity relative to
-   * the facing; the body leans with the puck's acceleration (`this.accel`), never the
-   * other way round.
+   * Keep the ball in the arm nearer the sideline the carrier is running along, so it's
+   * away from the pursuit in the middle of the field. Hysteresis stops it flip-flopping.
    */
-  animate(dt: number, anim: number, speed: number, carrier: boolean, time: number, lateral: number, forward: number) {
+  updateCarryArm(dt: number, carrier: boolean, y: number, facing: number) {
+    this.carrySwitch = Math.max(0, this.carrySwitch - dt);
+    if (!carrier) {
+      this.wasCarrier = false;
+      return;
+    }
+    // His left in core coordinates is (-sin f, cos f); toward the y = 0 sideline when cos f < 0.
+    const c = Math.cos(facing);
+    let want = this.carryLeft;
+    if (y < FIELD_W / 2 - 4 && Math.abs(c) > 0.3) want = c < 0;
+    else if (y > FIELD_W / 2 + 4 && Math.abs(c) > 0.3) want = c > 0;
+    if (!this.wasCarrier) {
+      this.carryLeft = want;
+      this.wasCarrier = true;
+    } else if (want !== this.carryLeft && this.carrySwitch <= 0) {
+      this.carryLeft = want;
+      this.carrySwitch = 1.2;
+    }
+  }
+
+  /** Pose the body on top of its puck: the body follows the puck, never the other way. */
+  animate(dt: number, input: RigInput) {
     this.ragdolled = false;
+    const anim = input.anim;
     if (anim !== this.lastAnim) {
+      const wasDown = this.lastAnim === ANIM.Down || this.lastAnim === ANIM.Dive || this.lastAnim === ANIM.Ragdoll;
+      const upright = anim !== ANIM.Down && anim !== ANIM.Dive && anim !== ANIM.Ragdoll;
+      this.getUp = wasDown && upright && input.speed < 3.5 && this.lastAnim !== -1 ? 0 : -1;
+      if (anim === ANIM.Juke) this.cutSide = Math.sign(this.accel.y || input.lat || 1);
+      if (anim === ANIM.Spin) this.spinDir = Math.sign(input.lat || -this.accel.y || 1);
       this.lastAnim = anim;
       this.animT = 0;
     }
     this.animT += dt;
-    const a = Math.min(1, Math.max(0.15, speed / 8.5));
-    this.phase += dt * (2.2 + speed * 1.55);
-    const s = Math.sin(this.phase);
-    const c = Math.cos(this.phase);
-    const t: Pose = { ...REST };
-
-    const run = (amp: number) => {
-      t.legL = s * 0.95 * amp;
-      t.legR = -s * 0.95 * amp;
-      t.kneeL = -0.3 * amp - Math.max(0, -Math.sin(this.phase + 0.7)) * 1.35 * amp;
-      t.kneeR = -0.3 * amp - Math.max(0, Math.sin(this.phase + 0.7)) * 1.35 * amp;
-      t.armL = -s * 0.85 * amp;
-      t.armR = s * 0.85 * amp;
-      t.elbL = 1.25;
-      t.elbR = 1.25;
-      t.leanZ = -0.12 - 0.24 * amp;
-      t.twist = s * 0.12 * amp;
-      t.hipsY = 0.99 - 0.06 * amp + Math.abs(c) * 0.07 * amp;
-      t.headZ = 0.12 * amp;
-    };
-
-    switch (anim) {
-      case ANIM.Stance:
-        if (this.build === 2) {
-          // Three-point stance: hand down, flat back, knees bent.
-          Object.assign(t, { hipsY: 0.72, leanZ: -1.05, legL: 0.85, legR: 0.3, kneeL: -1.55, kneeR: -1.2, armR: 1.2, elbR: 0.05, armL: 0.55, elbL: 0.7, headZ: 0.75 });
-        } else {
-          // Two-point athletic stance.
-          Object.assign(t, { hipsY: 0.86, leanZ: -0.42, legL: 0.42, legR: 0.12, kneeL: -0.85, kneeR: -0.65, armL: 0.55, armR: 0.55, elbL: 0.7, elbR: 0.7, headZ: 0.3 });
-        }
-        break;
-      case ANIM.Idle:
-        t.hipsY = 0.96 + Math.sin(time * 2 + this.phase) * 0.008;
-        break;
-      case ANIM.Run:
-      case ANIM.Juke:
-      case ANIM.Spin:
-        run(a);
-        if (anim === ANIM.Run && speed > 1.2 && forward < -0.35 * speed) {
-          // Backpedal: upright, short choppy steps, arms ready.
-          Object.assign(t, { leanZ: 0.05, legL: -s * 0.55 * a, legR: s * 0.55 * a, armL: 0.5, armR: 0.5, elbL: 1.4, elbR: 1.4, hipsY: 0.93 });
-        } else if (anim === ANIM.Run && speed > 1.2 && Math.abs(lateral) > 0.75 * speed) {
-          // Side shuffle: legs open and close, hips low.
-          const w = Math.abs(s) * 0.38;
-          Object.assign(t, { leanZ: -0.15, legL: 0.15, legR: 0.15, legLx: -w, legRx: w, kneeL: -0.5, kneeR: -0.5, hipsY: 0.9, armL: 0.45, armR: 0.45, elbL: 1.0, elbR: 1.0 });
-        }
-        // Core "left" is three.js -Z, which is a negative roll about X.
-        if (anim === ANIM.Juke) t.leanX = -Math.sign(lateral || 1) * 0.45;
-        if (anim === ANIM.Spin) Object.assign(t, { armL: 0.4, armR: 0.4, elbL: 2.0, elbR: 2.0 });
-        break;
-      case ANIM.Block:
-        run(0.35);
-        this.phase += dt * 6;
-        Object.assign(t, { leanZ: -0.55, hipsY: 0.86, armL: 1.45, armR: 1.45, elbL: 0.35, elbR: 0.35, armLx: 0.12, armRx: -0.12, headZ: 0.4 });
-        break;
-      case ANIM.Throw: {
-        // Release then follow-through: the arm whips over the top and comes down across.
-        const k = Math.min(1, this.animT / 0.35);
-        Object.assign(t, {
-          armR: 2.9 - k * 1.6, elbR: 0.35 + k * 0.4, armL: 1.0 - k * 0.6, elbL: 0.8,
-          leanZ: -0.05 - k * 0.35, legL: 0.35, legR: -0.25 - k * 0.2, twist: -0.45 + k * 0.7,
-        });
-        break;
-      }
-      case ANIM.Catch:
-        run(a * 0.6);
-        Object.assign(t, { armL: 2.3, armR: 2.3, elbL: 0.5, elbR: 0.5, armLx: 0.25, armRx: -0.25, headZ: -0.2 });
-        break;
-      case ANIM.Dive:
-        Object.assign(t, { leanZ: -1.4, hipsY: 0.6, armL: 3.0, armR: 3.0, elbL: 0.1, elbR: 0.1, legL: -0.35, legR: -0.5, kneeL: -0.2, kneeR: -0.2, bodyX: -0.4, headZ: -0.3 });
-        break;
-      case ANIM.Down:
-        Object.assign(t, {
-          leanZ: -1.52 * this.downSide, hipsY: 1.0, bodyX: -0.95 * this.downSide,
-          armL: 2.6, armR: 2.2, elbL: 0.4, elbR: 0.9, legL: 0.15, legR: -0.1, kneeL: -0.3, kneeR: -0.6,
-        });
-        break;
-      case ANIM.Stiff:
-        run(a);
-        Object.assign(t, { armL: 1.6, elbL: 0.0, armLx: 0.2 });
-        break;
-      case ANIM.Celebrate: {
-        const j = Math.abs(Math.sin(time * 7 + this.phase));
-        switch (this.number % 4) {
-          case 0: // jump, both arms up
-            Object.assign(t, { hipsY: 1.0 + j * 0.25, armL: 3.0, armR: 3.0, armLx: -0.35, armRx: 0.35, elbL: 0.2, elbR: 0.2, legL: j * 0.3, legR: -j * 0.2, kneeL: -j * 0.6, kneeR: -j * 0.5, headZ: -0.3 });
-            break;
-          case 1: // point to the sky
-            Object.assign(t, { armL: 3.1, elbL: 0.0, armR: 0.3, elbR: 1.6, headZ: -0.5, hipsY: 0.98 + j * 0.05 });
-            break;
-          case 2: // flex
-            Object.assign(t, { armL: 0.2, armR: 0.2, armLx: -1.5, armRx: 1.5, elbL: 2.3, elbR: 2.3, leanZ: 0.08, hipsY: 0.95 + j * 0.06 });
-            break;
-          default: { // high-knee dance
-            const h = Math.sin(time * 9 + this.phase);
-            Object.assign(t, { legL: Math.max(0, h) * 1.4, kneeL: -Math.max(0, h) * 1.8, legR: Math.max(0, -h) * 1.4, kneeR: -Math.max(0, -h) * 1.8, armL: 1.2 + h * 0.6, armR: 1.2 - h * 0.6, elbL: 1.2, elbR: 1.2, hipsY: 1.0 });
-          }
-        }
-        break;
-      }
-      case ANIM.Wrap:
-        // Wrapped up on the ball carrier: arms around him, driving the legs.
-        run(0.4);
-        Object.assign(t, { leanZ: -0.75, hipsY: 0.84, armL: 1.55, armR: 1.55, armLx: 0.55, armRx: -0.55, elbL: 1.1, elbR: 1.1, headZ: 0.5 });
-        break;
-      case ANIM.Hurdle:
-        Object.assign(t, { legL: 1.45, kneeL: -2.1, legR: -0.5, kneeR: -0.7, armL: 1.3, armR: 0.8, elbL: 0.5, elbR: 1.8, leanZ: -0.3, hipsY: 1.0 });
-        break;
-      case ANIM.Truck:
-        run(a);
-        Object.assign(t, { leanZ: -0.8, leanX: 0.2, hipsY: 0.86, armL: 0.7, elbL: 1.9, armLx: -0.1, headZ: 0.6 });
-        break;
-      case ANIM.Stagger:
-        run(a * 0.7);
-        t.leanX = Math.sin(time * 13 + this.phase) * 0.28;
-        t.leanZ = -0.42;
-        t.armL = 1.6;
-        t.armLx = -0.9;
-        break;
+    if (this.getUp >= 0) {
+      this.getUp += dt;
+      if (this.getUp > 0.7) this.getUp = -1;
     }
+    // Stride phase from distance covered, so planted feet keep pace with the puck.
+    if (input.speed > 0.35) this.phase += Math.PI * (1.6 + 0.35 * input.speed) * dt;
 
-    // Lean with the puck: forward when it accelerates, back when it brakes, into cuts.
-    const moving = anim === ANIM.Run || anim === ANIM.Juke || anim === ANIM.Spin || anim === ANIM.Stiff || anim === ANIM.Truck || anim === ANIM.Stagger || anim === ANIM.Catch;
-    if (moving) {
-      t.leanZ -= Math.max(-0.22, Math.min(0.28, this.accel.x * 0.025));
-      t.leanX -= Math.max(-0.3, Math.min(0.3, this.accel.y * 0.03));
-    }
+    const t = targetPose({
+      ...input,
+      animT: this.animT,
+      phase: this.phase,
+      getUp: this.getUp,
+      downSide: this.downSide,
+      cutSide: this.cutSide,
+      carryLeft: this.carryLeft,
+      pos: this.pos,
+      build: this.build,
+      number: this.number,
+    });
 
-    if (carrier && anim !== ANIM.Down && anim !== ANIM.Throw && anim !== ANIM.Celebrate && anim !== ANIM.Hurdle) {
-      if (this.pos === 'QB' && speed < 4.5 && (anim === ANIM.Idle || anim === ANIM.Run || anim === ANIM.Stance)) {
-        // Quarterback in the pocket: ball held in both hands at the chest.
-        Object.assign(t, { armL: 0.55, armR: 0.55, elbL: 1.95, elbR: 1.95, armLx: 0.28, armRx: -0.28 });
-      } else {
-        // High and tight: upper arm against the ribs, forearm up, ball tucked at the chest.
-        t.armR = 0.3;
-        t.elbR = 2.2;
-        t.armRx = -0.18;
-      }
-    }
-
-    const k = 1 - Math.exp(-dt * (anim === ANIM.Down || anim === ANIM.Dive ? 9 : 16));
+    const moving = anim === ANIM.Run || anim === ANIM.Juke || anim === ANIM.Spin || anim === ANIM.Stiff || anim === ANIM.Truck || anim === ANIM.Wrap;
+    const rate = anim === ANIM.Down || anim === ANIM.Dive ? 9 : anim === ANIM.Throw ? 24 : moving ? 26 : 14;
+    const k = 1 - Math.exp(-dt * rate);
     const p = this.pose;
-    for (const key of Object.keys(p) as (keyof Pose)[]) p[key] += (t[key] - p[key]) * k;
+    for (const key of POSE_KEYS) p[key] += (t[key] - p[key]) * k;
 
     const B = this.bones;
-    B[BONE.root].rotation.set(p.leanX, 0, p.leanZ);
-    B[BONE.root].position.set(p.bodyX, anim === ANIM.Down ? 0.15 : 0, 0);
-    B[BONE.hips].position.y = HIPS_REST_Y + (p.hipsY - 1.0);
-    B[BONE.spine].rotation.set(0, p.twist, 0);
-    B[BONE.head].rotation.set(0, 0, p.headZ);
-    B[BONE.hips].rotation.set(0, 0, 0);
+    const spin = anim === ANIM.Spin ? this.spinDir * Math.PI * 2 * Math.min(1, this.animT / SPIN_TIME) : 0;
+    B[BONE.root].rotation.set(p.leanX, spin, p.leanZ);
+    B[BONE.root].position.set(p.bodyX, p.drop, 0);
     B[BONE.hips].position.set(0, HIPS_REST_Y + (p.hipsY - 1.0), 0);
+    B[BONE.hips].rotation.set(0, p.hipYaw, p.hipZ);
+    B[BONE.spine].rotation.set(0, p.twist, p.spineZ);
+    B[BONE.chest].rotation.set(0, p.chestTwist, p.chestZ);
+    B[BONE.head].rotation.set(0, p.headY, p.headZ);
     B[BONE.thL].rotation.set(p.legLx, 0, p.legL);
     B[BONE.thR].rotation.set(p.legRx, 0, p.legR);
-    B[BONE.knL].rotation.z = p.kneeL;
-    B[BONE.knR].rotation.z = p.kneeR;
-    B[BONE.shL].rotation.set(p.armLx, 0, p.armL);
-    B[BONE.shR].rotation.set(p.armRx, 0, p.armR);
-    B[BONE.elL].rotation.z = p.elbL;
-    B[BONE.elR].rotation.z = p.elbR;
+    B[BONE.knL].rotation.set(0, 0, p.kneeL);
+    B[BONE.knR].rotation.set(0, 0, p.kneeR);
+    B[BONE.footL].rotation.set(0, 0, p.footL);
+    B[BONE.footR].rotation.set(0, 0, p.footR);
+    B[BONE.shL].rotation.set(p.armLx, p.armLy, p.armL);
+    B[BONE.shR].rotation.set(p.armRx, p.armRy, p.armR);
+    B[BONE.elL].rotation.set(0, 0, p.elbL);
+    B[BONE.elR].rotation.set(0, 0, p.elbR);
+    B[BONE.handL].rotation.set(0, 0, p.handL);
+    B[BONE.handR].rotation.set(0, 0, p.handR);
   }
 
   /** Pose the skeleton straight from the physics ragdoll (parts in core coordinates). */
@@ -383,21 +311,23 @@ class Rig {
     B[BONE.root].position.set(buf[pb] - tmpV.x, buf[pb + 2] - tmpV.y, -buf[pb + 1] - tmpV.z);
     B[BONE.hips].quaternion.identity();
     B[BONE.hips].position.set(0, HIPS_REST_Y, 0);
+    // Bones the ragdoll doesn't have stay straight.
+    for (const b of [BONE.chest, BONE.footL, BONE.footR, BONE.handL, BONE.handR]) B[b].quaternion.identity();
     const local = (bone: number, parent: THREE.Quaternion, child: THREE.Quaternion) => {
       tmpInv.copy(parent).invert();
       B[bone].quaternion.copy(tmpInv.multiply(child));
     };
-    // The skeleton's "L" bones sit on three.js +Z, which is the ragdoll's right side.
+    // Skeleton "L" bones are on the player's left (three.js -Z), like the ragdoll's.
     local(BONE.spine, qp, tmpQ[RP.Torso]);
     local(BONE.head, tmpQ[RP.Torso], tmpQ[RP.Head]);
-    local(BONE.shL, tmpQ[RP.Torso], tmpQ[RP.UpperArmR]);
-    local(BONE.elL, tmpQ[RP.UpperArmR], tmpQ[RP.ForeArmR]);
-    local(BONE.shR, tmpQ[RP.Torso], tmpQ[RP.UpperArmL]);
-    local(BONE.elR, tmpQ[RP.UpperArmL], tmpQ[RP.ForeArmL]);
-    local(BONE.thL, qp, tmpQ[RP.ThighR]);
-    local(BONE.knL, tmpQ[RP.ThighR], tmpQ[RP.ShinR]);
-    local(BONE.thR, qp, tmpQ[RP.ThighL]);
-    local(BONE.knR, tmpQ[RP.ThighL], tmpQ[RP.ShinL]);
+    local(BONE.shL, tmpQ[RP.Torso], tmpQ[RP.UpperArmL]);
+    local(BONE.elL, tmpQ[RP.UpperArmL], tmpQ[RP.ForeArmL]);
+    local(BONE.shR, tmpQ[RP.Torso], tmpQ[RP.UpperArmR]);
+    local(BONE.elR, tmpQ[RP.UpperArmR], tmpQ[RP.ForeArmR]);
+    local(BONE.thL, qp, tmpQ[RP.ThighL]);
+    local(BONE.knL, tmpQ[RP.ThighL], tmpQ[RP.ShinL]);
+    local(BONE.thR, qp, tmpQ[RP.ThighR]);
+    local(BONE.knR, tmpQ[RP.ThighR], tmpQ[RP.ShinR]);
   }
 }
 
@@ -437,6 +367,8 @@ export class Players {
   private cast: THREE.InstancedMesh;
   private uniforms: [UniformColors, UniformColors];
   private helmets: [THREE.BufferGeometry, THREE.BufferGeometry];
+  /** Lighter helmets for the sideline squads. */
+  private helmetsLow: [THREE.BufferGeometry, THREE.BufferGeometry];
   private squads: Squad[] = [];
   private dummy = new THREE.Object3D();
   private ballSpin = 0;
@@ -450,6 +382,10 @@ export class Players {
     this.helmets = [
       buildHelmetGeometry(this.uniforms[0].helmet, this.uniforms[0].stripe, this.uniforms[0].mask),
       buildHelmetGeometry(this.uniforms[1].helmet, this.uniforms[1].stripe, this.uniforms[1].mask),
+    ];
+    this.helmetsLow = [
+      buildHelmetGeometry(this.uniforms[0].helmet, this.uniforms[0].stripe, this.uniforms[0].mask, 0.5),
+      buildHelmetGeometry(this.uniforms[1].helmet, this.uniforms[1].stripe, this.uniforms[1].mask, 0.5),
     ];
     for (let i = 0; i < N; i++) {
       const r = new Rig(this.helmets[0]);
@@ -543,8 +479,8 @@ export class Players {
       const count = 16;
       const tex = new THREE.CanvasTexture(paintUniform(jacket, -1, SKIN_TONES[2]));
       tex.colorSpace = THREE.SRGBColorSpace;
-      const bodies = new THREE.InstancedMesh(bodyGeo(), new THREE.MeshLambertMaterial({ map: tex }), count);
-      const helmets = new THREE.InstancedMesh(this.helmets[team], HELMET_MAT, count);
+      const bodies = new THREE.InstancedMesh(bodyGeo(0, 0.6), new THREE.MeshLambertMaterial({ map: tex }), count);
+      const helmets = new THREE.InstancedMesh(this.helmetsLow[team], HELMET_MAT, count);
       const spots: Squad['spots'] = [];
       for (let i = 0; i < count; i++) {
         const x = 38 + (i / (count - 1)) * 44 + (rnd() - 0.5) * 1.6;
@@ -571,9 +507,24 @@ export class Players {
     if (this.circles.instanceColor) this.circles.instanceColor.needsUpdate = true;
   }
 
-  update(prev: Float32Array, cur: Float32Array, alpha: number, dt: number, time: number, rag?: Float32Array) {
+  /**
+   * @param presnap the play hasn't been snapped yet (players in their stances)
+   * @param between the whistle has blown (players catch their breath)
+   */
+  update(prev: Float32Array, cur: Float32Array, alpha: number, dt: number, time: number, rag?: Float32Array, presnap = false, between = false) {
     this.userIndex = -1;
     const d = this.dummy;
+    // The ball, for heads to follow and hands to reach for.
+    const bo = N * STRIDE;
+    const bxs = prev[bo] + (cur[bo] - prev[bo]) * alpha;
+    const bys = prev[bo + 1] + (cur[bo + 1] - prev[bo + 1]) * alpha;
+    const bzs = prev[bo + 2] + (cur[bo + 2] - prev[bo + 2]) * alpha;
+    const bState = cur[bo + 3];
+    const bHolder = cur[bo + 4];
+    const bMark = cur[bo + 7];
+    const btx = cur[bo + 8];
+    const bty = cur[bo + 9];
+    const bLeft = cur[bo + 10];
     // Which actors are ragdolls this frame (actor index -> buffer offset).
     const ragAt = new Map<number, number>();
     if (rag) for (let o = 0; o + RAGDOLL_STRIDE <= rag.length; o += RAGDOLL_STRIDE) ragAt.set(rag[o], o);
@@ -613,7 +564,25 @@ export class Players {
           }
           rig.lastV.set(forward, lateral);
         }
-        rig.animate(dt, anim, speed, (flags & FLAG.Carrier) !== 0, time, lateral, forward);
+        const carrier = (flags & FLAG.Carrier) !== 0;
+        rig.updateCarryArm(dt, carrier, y, facing);
+        rig.animate(dt, {
+          anim,
+          time,
+          speed,
+          fwd: forward,
+          lat: lateral,
+          accF: rig.accel.x,
+          accL: rig.accel.y,
+          carrier,
+          presnap,
+          between,
+          underCenter: presnap && rig.pos === 'QB' && Math.hypot(bxs - x, bys - y) < 1.6,
+          offense: (flags & FLAG.Offense) !== 0,
+          engaged: (flags & FLAG.Engaged) !== 0,
+          look: this.lookFor(i, rig, anim, carrier, presnap, x, y, facing, time, bxs, bys, bzs, bState, bHolder),
+          reach: this.reachFor(i, carrier, x, y, facing, bxs, bys, bzs, bState, bMark, btx, bty, bLeft),
+        });
       }
 
       // AO blob centered on the body (longer when lying down).
@@ -692,11 +661,13 @@ export class Players {
       this.ballSpin += dt * 30;
       this.ball.rotateX(this.ballSpin);
     } else if (state === 1 && holder >= 0 && this.rigs[holder] && !this.rigs[holder].ragdolled && cur[holder * STRIDE + 4] !== ANIM.Throw && cur[holder * STRIDE + 4] !== ANIM.Down) {
-      // In the carrying arm: along the forearm, tucked against the chest.
+      // In the carrying arm: along the forearm, tucked against the chest (the quarterback
+      // in the pocket holds it in both hands, on his right forearm).
       const rig = this.rigs[holder];
       rig.root.updateMatrixWorld(true);
-      const fore = rig.bones[BONE.elR];
-      fore.localToWorld(this.ball.position.set(0.02, -0.15, 0.03));
+      const left = rig.carryLeft && !(rig.pos === 'QB' && cur[holder * STRIDE + 5] < 4.5);
+      const fore = rig.bones[left ? BONE.elL : BONE.elR];
+      fore.localToWorld(this.ball.position.set(0.03, -0.14, left ? 0.035 : -0.035));
       fore.getWorldQuaternion(this.ball.quaternion).multiply(BALL_ALONG_FOREARM);
       this.ballPos.copy(this.ball.position);
     } else if (state === 1 && holder >= 0) {
@@ -706,6 +677,62 @@ export class Players {
     }
     this.ballShadow.position.set(bx, 0.02, -by);
     this.ballShadow.visible = bz > 0.4;
+  }
+
+  /** Where a player's head turns: the ball (or its carrier), within reason. */
+  private lookFor(
+    i: number, rig: Rig, anim: number, carrier: boolean, presnap: boolean, x: number, y: number, facing: number, time: number,
+    bx: number, by: number, bz: number, state: number, holder: number,
+  ): { yaw: number; pitch: number } | null {
+    if (anim === ANIM.Block || anim === ANIM.Wrap || anim === ANIM.Down || anim === ANIM.Dive) return null;
+    if (carrier) {
+      // The quarterback scans the field in the pocket; runners look where they're going.
+      return rig.pos === 'QB' && anim !== ANIM.Run ? { yaw: Math.sin(time * 0.9 + i) * 0.75, pitch: 0 } : null;
+    }
+    if (presnap && (rig.pos === 'OL' || rig.pos === 'QB' || rig.pos === 'K' || rig.pos === 'P')) return null;
+    if (state === 1 && holder === i) return null;
+    const dx = bx - x;
+    const dy = by - y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < 0.4) return null;
+    let yaw = Math.atan2(dy, dx) - facing;
+    yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+    return { yaw, pitch: Math.atan2(bz - 1.85, dist) };
+  }
+
+  /** A pass (or kick) about to come down near this player: reach for it. */
+  private reachFor(
+    i: number, carrier: boolean, x: number, y: number, facing: number,
+    bx: number, by: number, bz: number, state: number, mark: number, tx: number, ty: number, tleft: number,
+  ): { yaw: number; pitch: number; w: number } | null {
+    if (carrier || state !== 2 || mark <= 0 || !(tleft < 0.75)) return null;
+    const dTarget = Math.hypot(tx - x, ty - y);
+    if (dTarget > 2.4) return null;
+    // Aim at the ball itself once it's close, before that at where it will be caught.
+    const close = tleft < 0.3;
+    const px = close ? bx : tx;
+    const py = close ? by : ty;
+    const pz = close ? bz : 1.45;
+    const dx = px - x;
+    const dy = py - y;
+    const horiz = Math.hypot(dx, dy);
+    let yaw = Math.atan2(dy, dx) - facing;
+    yaw = Math.atan2(Math.sin(yaw), Math.cos(yaw));
+    const w = (1 - Math.min(1, Math.max(0, (tleft - 0.12) / 0.6))) * (1 - dTarget / 2.4);
+    void i;
+    return { yaw, pitch: Math.atan2(pz - 1.55, Math.max(horiz, 0.3)), w: Math.min(1, w * 1.6) };
+  }
+
+  /** Where a player's body is (three.js coordinates; for dev close-ups). */
+  rigPosition(i: number): THREE.Vector3 {
+    const r = this.rigs[i];
+    if (!r) return new THREE.Vector3();
+    if (r.ragdolled) return r.bones[BONE.hips].getWorldPosition(new THREE.Vector3()).setY(0);
+    return r.root.position.clone();
+  }
+
+  rigFacing(i: number): number {
+    return this.rigs[i]?.facing ?? 0;
   }
 
   /** Receiver icon (1–5) nearest a ground point in core coordinates, or 0. */

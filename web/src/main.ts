@@ -597,8 +597,15 @@ function contextHint(s: Session): string {
   return pad ? 'RT sprint' : 'SHIFT sprint';
 }
 
+/** Dev: stop the real-time loop so `__sf.tick` alone drives the game. */
+let devHold = false;
+
 function loop(now: number) {
   requestAnimationFrame(loop);
+  if (devHold) {
+    last = now;
+    return;
+  }
   frame(now);
 }
 
@@ -637,7 +644,8 @@ function frame(now: number, draw = true) {
   handleEvents(s, JSON.parse(s.game.events()) as GameEvent[]);
 
   s.players.padIcons = usingPad;
-  s.players.update(s.prev, s.cur, alpha, dt, time, s.rag);
+  const inPlay = s.hud.phase === 'inplay';
+  s.players.update(s.prev, s.cur, alpha, dt, time, s.rag, inPlay && s.hud.play_phase === 'presnap', !inPlay || s.hud.play_phase === 'over');
   updateTarget(s, s.cur);
   const scrimmageLines = s.hud.situation !== 'kickoff' && !s.hud.special;
   s.stadium.setMarkers(s.hud.los_x, s.hud.first_down_x, scrimmageLines && s.hud.to_go !== 'Goal', s.hud.down, s.hud.dir);
@@ -665,7 +673,8 @@ function frame(now: number, draw = true) {
   // Pull back for kicks and deep balls.
   const bz = s.players.ballPos.y;
   const boost = h.play_phase === 'live' ? (h.special && bz > 2.5 ? 1.35 : 1 + Math.min(Math.max(bz - 3, 0), 12) / 40) : 1;
-  s.cam.update(dt, fx, fy, h.dir, boost);
+  // Stay behind whoever has the ball: an interception or a kick return swings the camera.
+  s.cam.update(dt, fx, fy, h.ball_dir ?? h.dir, boost);
 
   if (!s.attract) {
     ui.updateHud(h, s.teams);
@@ -739,7 +748,19 @@ function frame(now: number, draw = true) {
     fpsTime = 0;
   }
 
+  if (inspect) inspectCamera(s);
   if (draw) pipeline!.render(s.scene, s.cam.camera);
+}
+
+/** Dev close-up of one player (see `__sf.shot`). */
+let inspect: { i: number; angle: number; dist: number; height: number; lookY: number } | null = null;
+function inspectCamera(s: Session) {
+  if (!inspect) return;
+  const p = s.players.rigPosition(inspect.i);
+  const f = s.players.rigFacing(inspect.i) + inspect.angle;
+  const cam = s.cam.camera;
+  cam.position.set(p.x + Math.cos(f) * inspect.dist, inspect.height, p.z - Math.sin(f) * inspect.dist);
+  cam.lookAt(p.x, inspect.lookY, p.z);
 }
 
 /** Pass / kick target marker from the snapshot's ball block. */
@@ -852,6 +873,28 @@ if (import.meta.env.DEV) {
     /** Draw one frame now (the hidden preview pane doesn't run animation frames). */
     draw() {
       if (session && pipeline) pipeline.render(session.scene, session.cam.camera);
+    },
+    /** Close-up of one player for checking the model: angle around him (0 = in front). No args: off. */
+    shot(i?: number, angle = 0, dist = 3.2, height = 1.3, lookY = 1.1) {
+      inspect = i === undefined ? null : { i, angle, dist, height, lookY };
+      if (session && pipeline) {
+        inspectCamera(session);
+        pipeline.render(session.scene, session.cam.camera);
+      }
+    },
+    /** Triangles and draw calls in the last rendered frame. */
+    stats() {
+      if (!renderer || !session || !pipeline) return null;
+      renderer.info.autoReset = false;
+      renderer.info.reset();
+      pipeline.render(session.scene, session.cam.camera);
+      const r = { triangles: renderer.info.render.triangles, calls: renderer.info.render.calls };
+      renderer.info.autoReset = true;
+      return r;
+    },
+    /** Freeze the real-time loop (true) so only `tick` advances the game. */
+    hold(on = true) {
+      devHold = on;
     },
     tick(seconds: number) {
       const frames = Math.round(seconds * 60);

@@ -72,8 +72,11 @@ docs/           This file, ROADMAP.md, TEAMS.md.
    with a dotted line along its flight (kicks get a cyan one).
 4. **Ball-carrier moves.** Juke, spin and stiff arm at first; hurdle, truck and
    cut-backs come later.
-5. **Adjustable camera.** The default is a broadcast camera behind the offense. The
-   player can change its zoom, height and preset, and the setting is saved.
+5. **Adjustable camera.** The default is a broadcast camera behind the team with the
+   ball: on an interception, fumble recovery or kick return it swings around to stay
+   behind the new ball carrier mid-play. While it swings, the stick keeps steering the
+   way it was pushed until it's let go. The player can change its zoom, height and
+   preset, and the setting is saved.
 
 ### Rules
 Full pro rules with **sliders**: penalty rates, game speed, injury rate, CPU skill per
@@ -171,11 +174,22 @@ emits structured play-by-play events, so either output can use them.
      that bounces on big plays, glowing ribbon billboards (league/team names only, no real
      brands), a jumbotron with the live score, lattice light towers, team benches,
      coolers, a chain gang with a down box, and sideline squads in warm-up jackets.
-  4. **Players:** athletic low-poly proportions: V-shaped torso, shoulder pads with caps,
-     helmets with facemask cage and stripe, bent-knee stances. Each player has a painted
-     uniform texture (shaded jersey fabric, numbers, stripes). One skinned body plus one
-     helmet per player, so just 2 draw calls.
-  5. **HUD:** an early-2000s TV broadcast package: top scorebug, lower-third
+  4. **Players:** athletic low-poly proportions on a 17-bone skeleton: limbs and torso are
+     continuous tubes that bend smoothly at the knees, elbows and waist; shaped muscles,
+     gloved hands with thumbs, cleats, shoulder pads with numbered caps, and a face behind
+     an open helmet (lining, ear holes, chin strap, three-bar facemask, stripe). Gear
+     varies by position (towels for skill players, neck rolls for linemen). Each player
+     has a painted uniform texture (shaded jersey fabric, numbers, stripes). One skinned
+     body plus one helmet per player, so just 2 draw calls (about 4,000 triangles).
+  5. **Animation:** procedural, on top of the puck. Legs use two-bone IK from foot spots, so
+     planted feet keep pace with the puck instead of sliding; gait blends walk, jog and
+     sprint, plus backpedal, shuffle and crossover runs, with arm swing, hip and shoulder
+     counter-rotation and leaning into acceleration and turns. Heads track the ball,
+     receivers reach for passes, and players get up through a kneel. Stances are
+     position-specific (three/four-point linemen, under center or shotgun, staggered
+     receivers, ready defenders); the QB throws with a whip and follow-through, kickers
+     swing through the ball, and carriers tuck the ball in the sideline-side arm.
+  6. **HUD:** an early-2000s TV broadcast package: top scorebug, lower-third
      play-by-play, swoosh banners, and a play-call menu with bold condensed italics
      (Barlow Condensed, bundled and OFL-licensed), beveled glossy gradient panels, and
      drop shadows.
