@@ -46,7 +46,7 @@ Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibiti
 - [x] Kick returns fixed (return team blocks the coverage); scoring back to realistic levels
 - Known: CPU rushing varies a lot game to game (about 3 yards per carry on average).
 
-## Polish before M3 ✅ *(current)*
+## Polish before M3 ✅
 - [x] Puck engine: every player is a physical circle; collisions trade momentum, blocking
       is a push-and-leverage fight between circles, tackle reach is measured from their
       edges, jukes are acceleration bursts, and bodies lean with their circle
@@ -62,6 +62,16 @@ Rust core + WebAssembly + Three.js client, PS2-style graphics, playable exhibiti
 - Pocket report: `cargo test -p sf-core --release --test pocket -- --ignored --nocapture`
 - Known: CPU rushing is low (about 2.5 yards per carry) and CPU passing a bit high
   (about 8.5 yards per attempt); next tuning pass.
+
+## Visual polish ✅ *(current)*
+- [x] Camera swings behind the new ball carrier mid-play on interceptions, fumble
+      recoveries and kick returns (the stick keeps its direction during the swing)
+- [x] Detailed player model: smooth-bending limbs and torso, hands with thumbs, cleats,
+      face behind an open helmet with a three-bar facemask, numbered shoulder caps,
+      towels and neck rolls by position
+- [x] New animation system: leg IK with planted feet, gait blending, backpedal, shuffle,
+      crossover runs, head tracking, catch reaches, get-ups, position stances, QB throw
+      and kicker swing, ball carried in the sideline-side arm
 
 ## M3 — League data
 - 32 teams (after TEAMS.md is approved), Sarasota branding from the owner

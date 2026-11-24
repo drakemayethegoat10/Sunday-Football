@@ -38,6 +38,12 @@ export class CameraRig {
   private shakeAmt = 0;
   private shakeT = 0;
   private boost = 1;
+  /**
+   * The view the stick is read against. It holds while the stick is pushed, so when the
+   * camera swings around after a turnover the player keeps running the way he was going;
+   * it catches up with the camera once the stick is let go.
+   */
+  private ctrlF = new THREE.Vector3(1, 0, 0);
 
   constructor(aspect: number) {
     this.camera = new THREE.PerspectiveCamera(52, aspect, 0.3, 700);
@@ -81,7 +87,7 @@ export class CameraRig {
     const target = dir > 0 ? 0 : Math.PI;
     let d = target - this.angle;
     if (Math.abs(d) > 1e-3) {
-      const step = this.snapNext ? Math.abs(d) : Math.min(Math.abs(d), dt * 2.2);
+      const step = this.snapNext ? Math.abs(d) : Math.min(Math.abs(d), dt * 2.6);
       this.angle += Math.sign(d) * step;
     }
     const fwdX = Math.cos(this.angle);
@@ -107,6 +113,7 @@ export class CameraRig {
     this.look.lerp(lookAt, k);
     this.camera.position.copy(this.pos);
     this.camera.lookAt(this.look);
+    if (this.snapNext) this.ctrlF.set(this.look.x - this.pos.x, 0, this.look.z - this.pos.z).normalize();
     this.applyShake(dt);
     this.snapNext = false;
   }
@@ -150,10 +157,12 @@ export class CameraRig {
 
   /** Convert screen-relative stick input (ix right, iy up) into a core field vector. */
   screenToField(ix: number, iy: number): [number, number] {
-    const f = new THREE.Vector3().subVectors(this.look, this.pos);
-    f.y = 0;
-    if (f.lengthSq() < 1e-6) f.set(1, 0, 0);
-    f.normalize();
+    if (Math.hypot(ix, iy) < 0.25) {
+      const live = new THREE.Vector3().subVectors(this.look, this.pos);
+      live.y = 0;
+      if (live.lengthSq() > 1e-6) this.ctrlF.copy(live.normalize());
+    }
+    const f = this.ctrlF;
     const rx = -f.z;
     const rz = f.x;
     const vx = f.x * iy + rx * ix;

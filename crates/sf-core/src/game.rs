@@ -94,6 +94,10 @@ pub struct Hud {
     pub first_down_x: f32,
     pub ball_y: f32,
     pub dir: f32,
+    /// Direction the team that has the ball right now attacks. Same as `dir` until the
+    /// ball changes hands during a play (interception, fumble recovery, kick return);
+    /// the camera swings to stay behind the ball carrier.
+    pub ball_dir: f32,
     pub lineup: u32,
     pub off_play: String,
     pub def_play: String,
@@ -1352,6 +1356,14 @@ impl Game {
             .map(|s| s.in_ez_catch && self.play.carrier.is_some() && self.play.carrier == self.play.user && self.play.t - s.caught_t < 1.2)
             .unwrap_or(false)
             && self.play.phase == PlayPhase::Live;
+        let dir = if self.play.special.is_some() { self.play.dir } else { self.team_dir(self.possession) };
+        let ball_dir = if self.phase == Phase::InPlay && self.play.phase != PlayPhase::PreSnap && self.play.poss_team != self.play.off_team {
+            -self.play.dir
+        } else if self.phase == Phase::InPlay && self.play.phase != PlayPhase::PreSnap {
+            self.play.dir
+        } else {
+            dir
+        };
         Hud {
             phase: match self.phase {
                 Phase::PlayCall => "playcall",
@@ -1397,7 +1409,8 @@ impl Game {
             los_x: self.los_x(),
             first_down_x: self.first_down_x(),
             ball_y: self.ball_y,
-            dir: if self.play.special.is_some() { self.play.dir } else { self.team_dir(self.possession) },
+            dir,
+            ball_dir,
             lineup: self.lineup,
             off_play: OFFENSE[self.play.off_play.min(OFFENSE.len() - 1)].name.to_string(),
             def_play: DEFENSE[self.play.def_play.min(DEFENSE.len() - 1)].name.to_string(),
